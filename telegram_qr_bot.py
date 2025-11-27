@@ -159,78 +159,49 @@ WEBSITES = [
 # Format: {user_id: {website_index: {"qr_token": str, "scraper": scraper_instance}}}
 user_qr_sessions = {}
 
-# Queue system for each website - only one user can use a website at a time
-# Format: {website_index: {"active_user": user_id, "queue": [user_id, ...], "lock_time": timestamp}}
+# REMOVED: Queue system not needed - API supports concurrent users!
+# The key is proper SESSION ISOLATION (cookies) per user, not queuing.
+# Each user gets their own isolated session with cookies maintained throughout.
 import asyncio
-website_locks = {i: {"active_user": None, "queue": [], "lock_time": None} for i in range(4)}
-website_lock_mutex = asyncio.Lock()
 
-# Maximum time a user can hold a website lock (in seconds)
-WEBSITE_LOCK_TIMEOUT = 120  # 2 minutes
+# Session cleanup interval
+SESSION_CLEANUP_INTERVAL = 300  # 5 minutes
+
+async def cleanup_old_sessions():
+    """Clean up sessions older than 10 minutes"""
+    global user_qr_sessions
+    current_time = time.time()
+    cleaned = 0
+    
+    for user_id in list(user_qr_sessions.keys()):
+        for website_index in list(user_qr_sessions[user_id].keys()):
+            session_data = user_qr_sessions[user_id].get(website_index, {})
+            created_at = session_data.get("created_at", 0)
+            if current_time - created_at > 600:  # 10 minutes
+                del user_qr_sessions[user_id][website_index]
+                cleaned += 1
+        # Remove empty user dict
+        if not user_qr_sessions[user_id]:
+            del user_qr_sessions[user_id]
+    
+    if cleaned > 0:
+        logger.info(f"[SESSION_CLEANUP] Cleaned up {cleaned} old sessions")
 
 async def acquire_website_lock(website_index: int, user_id: int) -> tuple:
-    """Try to acquire lock for a website. Returns (success, position_in_queue)"""
-    async with website_lock_mutex:
-        lock_info = website_locks[website_index]
-        current_time = time.time()
-        
-        # Check if current lock has expired
-        if lock_info["active_user"] is not None:
-            if lock_info["lock_time"] and (current_time - lock_info["lock_time"]) > WEBSITE_LOCK_TIMEOUT:
-                logger.info(f"[QUEUE] Lock expired for user {lock_info['active_user']} on website {website_index}")
-                lock_info["active_user"] = None
-                lock_info["lock_time"] = None
-        
-        # If no active user, this user gets the lock
-        if lock_info["active_user"] is None:
-            lock_info["active_user"] = user_id
-            lock_info["lock_time"] = current_time
-            # Remove from queue if was waiting
-            if user_id in lock_info["queue"]:
-                lock_info["queue"].remove(user_id)
-            logger.info(f"[QUEUE] User {user_id} acquired lock for website {website_index}")
-            return True, 0
-        
-        # If this user already has the lock
-        if lock_info["active_user"] == user_id:
-            lock_info["lock_time"] = current_time  # Refresh lock time
-            return True, 0
-        
-        # User needs to wait in queue
-        if user_id not in lock_info["queue"]:
-            lock_info["queue"].append(user_id)
-        position = lock_info["queue"].index(user_id) + 1
-        logger.info(f"[QUEUE] User {user_id} waiting in queue position {position} for website {website_index}")
-        return False, position
+    """NO QUEUE NEEDED - All users proceed immediately with isolated sessions.
+    Returns (True, 0) always - no waiting!
+    """
+    logger.info(f"[SESSION] User {user_id} starting website {website_index} - NO queue, using isolated session")
+    return True, 0
 
 async def release_website_lock(website_index: int, user_id: int):
-    """Release lock for a website and notify next in queue"""
-    async with website_lock_mutex:
-        lock_info = website_locks[website_index]
-        
-        if lock_info["active_user"] == user_id:
-            lock_info["active_user"] = None
-            lock_info["lock_time"] = None
-            
-            # Give lock to next in queue if any
-            if lock_info["queue"]:
-                next_user = lock_info["queue"].pop(0)
-                lock_info["active_user"] = next_user
-                lock_info["lock_time"] = time.time()
-                logger.info(f"[QUEUE] Lock transferred to user {next_user} for website {website_index}")
-                return next_user
-            
-            logger.info(f"[QUEUE] User {user_id} released lock for website {website_index}")
-        return None
+    """No-op - just log for debugging. Queue system removed!"""
+    logger.info(f"[SESSION] User {user_id} finished with website {website_index}")
+
 
 def get_queue_position(website_index: int, user_id: int) -> int:
-    """Get user's position in queue (0 = has lock, 1+ = waiting)"""
-    lock_info = website_locks[website_index]
-    if lock_info["active_user"] == user_id:
-        return 0
-    if user_id in lock_info["queue"]:
-        return lock_info["queue"].index(user_id) + 1
-    return -1  # Not in queue
+    """No queue - always return 0 (no waiting)"""
+    return 0
 
 # Headers for API requests
 HEADERS = {
@@ -793,8 +764,47 @@ def get_headers_for_website(website):
     }
 
 
+def get_or_create_user_session(user_id, website_index, website):
+    """Get existing session or create new one for user/website combination.
+    This ensures TRUE browser-like session isolation with persistent cookies.
+    """
+    global user_qr_sessions
+    
+    # Initialize user dict if needed
+    if user_id not in user_qr_sessions:
+        user_qr_sessions[user_id] = {}
+    
+    # Check if we have an existing valid session (created within last 5 minutes)
+    if website_index in user_qr_sessions[user_id]:
+        session_data = user_qr_sessions[user_id][website_index]
+        created_at = session_data.get("created_at", 0)
+        if time.time() - created_at < 300:  # 5 minutes
+            logger.info(f"[SESSION] Reusing existing session for user {user_id}, website {website_index}")
+            return session_data["scraper"], session_data["headers"]
+    
+    # Create NEW fresh session - like opening a new browser profile
+    logger.info(f"[SESSION] Creating NEW isolated session for user {user_id}, website {website_index}")
+    scraper = create_scraper_session()
+    headers = get_headers_for_website(website)
+    
+    # Pre-store the session BEFORE any requests
+    user_qr_sessions[user_id][website_index] = {
+        "scraper": scraper,
+        "headers": headers,
+        "qr_data": None,
+        "qr_token": None,
+        "qr_unique_id": None,
+        "session_id": None,
+        "created_at": time.time()
+    }
+    
+    return scraper, headers
+
+
 def generate_qr_code(website, user_id, website_index, max_retries=15):
     """Generate QR code for a website with retry mechanism using cloudscraper
+    
+    CRITICAL: Uses persistent session per user/website to maintain cookies like a browser.
     
     Args:
         website: Website configuration dict
@@ -808,22 +818,28 @@ def generate_qr_code(website, user_id, website_index, max_retries=15):
     base_url = website['base_url']
     code = website['code']  # Use the original referral code
     
+    # Get or create persistent session for this user - SAME session used throughout!
+    scraper, headers = get_or_create_user_session(user_id, website_index, website)
+    
     for retry in range(max_retries):
         try:
-            # Create fresh scraper session for this user/website combination
-            scraper = create_scraper_session()
-            headers = get_headers_for_website(website)
+            # IMPORTANT: Use the SAME scraper throughout - don't create new one!
+            # This maintains cookies like a browser does
             
-            # Add random delay to stagger concurrent requests from different users
-            # Longer delay for retries to spread out requests
-            initial_delay = random.uniform(0.5 + (retry * 0.5), 2 + (retry * 1))
-            time.sleep(initial_delay)
+            # Add small random delay only on first attempt or after error
+            if retry > 0:
+                retry_delay = random.uniform(2 + (retry * 0.5), 4 + (retry * 1))
+                logger.info(f"[GENERATE_QR] Retry {retry + 1}, waiting {retry_delay:.1f}s...")
+                time.sleep(retry_delay)
+            else:
+                # Small initial delay to spread concurrent users
+                time.sleep(random.uniform(0.1, 0.5))
             
-            # Step 1: Generate QR code
+            # Step 1: Generate QR code - using persistent session with cookies!
             generate_url = f"{base_url}/qrcode/generate"
             generate_payload = {"code": code}
             
-            logger.info(f"[GENERATE_QR] User {user_id}, Attempt {retry + 1}/{max_retries} for {website['name']}")
+            logger.info(f"[GENERATE_QR] User {user_id}, Attempt {retry + 1}/{max_retries} for {website['name']} (persistent session)")
             response = scraper.post(generate_url, json=generate_payload, headers=headers, timeout=30)
             
             if response.status_code != 200:
@@ -940,19 +956,22 @@ def generate_qr_code(website, user_id, website_index, max_retries=15):
             
             logger.info(f"[GENERATE_QR] User {user_id} - QR unique ID extracted: {qr_unique_id[:20] if qr_unique_id else None}...")
             
-            # Store the session for this user/website for status checking
-            if user_id not in user_qr_sessions:
-                user_qr_sessions[user_id] = {}
-            user_qr_sessions[user_id][website_index] = {
-                "scraper": scraper,
-                "qr_data": qr_data,
-                "qr_token": qr_token or qr_unique_id,
-                "qr_unique_id": qr_unique_id,
-                "session_id": session_id,
-                "headers": headers,
-                "created_at": time.time()
-            }
-            logger.info(f"[GENERATE_QR] Stored session for user {user_id}, website {website_index}, token: {qr_token or qr_unique_id}")
+            # Update the existing session with QR data (session/cookies already stored)
+            if user_id in user_qr_sessions and website_index in user_qr_sessions[user_id]:
+                user_qr_sessions[user_id][website_index].update({
+                    "qr_data": qr_data,
+                    "qr_token": qr_token or qr_unique_id,
+                    "qr_unique_id": qr_unique_id,
+                    "session_id": session_id,
+                })
+            logger.info(f"[GENERATE_QR] Updated session for user {user_id}, website {website_index}, token: {qr_token or qr_unique_id}")
+            
+            # Log cookies for debugging - this is key to session isolation
+            try:
+                cookies = dict(scraper.cookies)
+                logger.info(f"[GENERATE_QR] User {user_id} - Session cookies: {list(cookies.keys())}")
+            except:
+                pass
             
             qr = QRCode(
                 version=1,
@@ -996,7 +1015,10 @@ def generate_qr_code(website, user_id, website_index, max_retries=15):
 
 
 def check_login_status(website, user_id, website_index):
-    """Check login status for a website using the user's stored session
+    """Check login status for a website using the user's PERSISTENT stored session
+    
+    CRITICAL: Must use the SAME scraper session (with cookies) that was used for QR generation!
+    This is how browsers maintain session identity.
     
     Args:
         website: Website configuration dict
@@ -1007,20 +1029,28 @@ def check_login_status(website, user_id, website_index):
         base_url = website['base_url']
         code = website['code']  # Use the original referral code
         
-        # Get the stored session for this user/website
+        # Get the stored session for this user/website - MUST exist from QR generation
         session_data = None
         if user_id in user_qr_sessions and website_index in user_qr_sessions[user_id]:
             session_data = user_qr_sessions[user_id][website_index]
         
-        # Use the stored scraper session if available, otherwise create new
+        # MUST use the stored scraper session - this has the cookies!
         if session_data and session_data.get("scraper"):
             scraper = session_data["scraper"]
             headers = session_data.get("headers") or get_headers_for_website(website)
-            logger.info(f"[CHECK_STATUS] Using stored session for user {user_id}, website {website_index}")
+            logger.info(f"[CHECK_STATUS] Using PERSISTENT session for user {user_id}, website {website_index}")
+            
+            # Log cookies for debugging
+            try:
+                cookies = dict(scraper.cookies)
+                logger.info(f"[CHECK_STATUS] User {user_id} - Session cookies: {list(cookies.keys())}")
+            except:
+                pass
         else:
+            # This shouldn't happen - log error
+            logger.error(f"[CHECK_STATUS] NO stored session for user {user_id}, website {website_index}! Creating new (may fail)")
             scraper = create_scraper_session()
             headers = get_headers_for_website(website)
-            logger.info(f"[CHECK_STATUS] Created new session for user {user_id}, website {website_index}")
         
         status_url = f"{base_url}/login/status"
         status_payload = {"code": code}
