@@ -9,6 +9,8 @@ import sys
 import os
 import threading
 import random
+import string
+import secrets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, time as dt_time
 from qrcode import QRCode
@@ -132,28 +134,33 @@ WEBSITES = [
     {
         "name": "EarnBro",
         "base_url": "https://earnbro.net/pl3/2/ws",
-        "code": "4CWA4HVE",
-        "url": "https://earnbro.net/#/pages/gs/log?id=4CWA4HVE"
+        "domain": "earnbro.net"
     },
     {
         "name": "ZapKaro",
         "base_url": "https://zapkaroapp.com/pl3/2/ws",
-        "code": "R7XAR4HV",
-        "url": "https://zapkaroapp.com/#/pages/gs/log?id=R7XAR4HV"
+        "domain": "zapkaroapp.com"
     },
     {
         "name": "CoinZa",
         "base_url": "https://coinzaapp.com/pl3/2/ws",
-        "code": "972A9WYL",
-        "url": "https://coinzaapp.com/#/pages/gs/log?id=972A9WYL"
+        "domain": "coinzaapp.com"
     },
     {
         "name": "Kamate",
         "base_url": "https://kamate1.com/pl3/2/ws",
-        "code": "p5dmet",
-        "url": "https://kamate1.com/#/pages/gs/log?id=p5dmet"
+        "domain": "kamate1.com"
     }
 ]
+
+def generate_session_code(length=8):
+    """Generate a unique session code for each user's website session"""
+    # Use uppercase letters and digits for session code
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(length))
+
+# Store active sessions per user: {user_id: {website_index: session_code}}
+user_website_sessions = {}
 
 # Headers for API requests
 HEADERS = {
@@ -716,10 +723,16 @@ def get_headers_for_website(website):
     }
 
 
-def generate_qr_code(website, max_retries=5):
-    """Generate QR code for a website with retry mechanism using cloudscraper"""
+def generate_qr_code(website, session_code, max_retries=5):
+    """Generate QR code for a website with retry mechanism using cloudscraper
+    
+    Args:
+        website: Website configuration dict
+        session_code: Unique session code for this user's session
+        max_retries: Maximum number of retry attempts
+    """
     base_url = website['base_url']
-    code = website['code']
+    code = session_code  # Use the unique session code, not static code
     
     for retry in range(max_retries):
         try:
@@ -842,11 +855,16 @@ def generate_qr_code(website, max_retries=5):
     return None, f"Failed to generate QR code after {max_retries} attempts. Please try again later."
 
 
-def check_login_status(website):
-    """Check login status for a website using cloudscraper"""
+def check_login_status(website, session_code):
+    """Check login status for a website using cloudscraper
+    
+    Args:
+        website: Website configuration dict
+        session_code: Unique session code for this user's session
+    """
     try:
         base_url = website['base_url']
-        code = website['code']
+        code = session_code  # Use the unique session code
         headers = get_headers_for_website(website)
         
         # Use cloudscraper for anti-bot bypass
@@ -1384,6 +1402,13 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Reset completed websites for new number
     user_completed_websites[user_id] = []
     
+    # Generate unique session codes for all websites for this user
+    # Each user gets their own unique session codes to prevent conflicts
+    user_website_sessions[user_id] = {}
+    for i in range(len(WEBSITES)):
+        user_website_sessions[user_id][i] = generate_session_code()
+    logger.info(f"[SESSION] Generated unique session codes for user {user_id}: {user_website_sessions[user_id]}")
+    
     # Add phone number to database
     phone_record = await add_phone_number(db_user['id'], user_id, phone)
     
@@ -1402,6 +1427,7 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Get current website
     current_index = 0
     website = WEBSITES[current_index]
+    session_code = user_website_sessions[user_id][current_index]
     
     # Send loading message first
     site_name = get_site_name(current_index)
@@ -1410,8 +1436,8 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"📱 Phone: {format_phone_number(phone)}"
     )
     
-    # Generate QR code
-    qr_image, error = generate_qr_code(website)
+    # Generate QR code with unique session code
+    qr_image, error = generate_qr_code(website, session_code)
     
     if error:
         await loading_msg.edit_text(
@@ -1442,20 +1468,28 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_sessions[user_id]["poll_count"] = 0
     
     async def poll_job(ctx):
-        await poll_login_status(ctx, user_id, website, current_index)
+        await poll_login_status(ctx, user_id, website, current_index, session_code)
     
     context.job_queue.run_once(poll_job, when=5)
 
 
-async def poll_login_status(context: ContextTypes.DEFAULT_TYPE, user_id: int, website: dict, website_index: int):
-    """Poll login status and handle success"""
+async def poll_login_status(context: ContextTypes.DEFAULT_TYPE, user_id: int, website: dict, website_index: int, session_code: str):
+    """Poll login status and handle success
+    
+    Args:
+        context: Telegram context
+        user_id: User's Telegram ID
+        website: Website configuration dict
+        website_index: Index of the website in WEBSITES list
+        session_code: Unique session code for this user's session
+    """
     try:
         if user_id not in user_sessions or not user_sessions[user_id].get("is_polling"):
             logger.info(f"Polling stopped for user {user_id}")
             return
         
-        logger.info(f"Polling status for user {user_id}, website: {website['name']}")
-        status_result = check_login_status(website)
+        logger.info(f"Polling status for user {user_id}, website: {website['name']}, session: {session_code[:4]}...")
+        status_result = check_login_status(website, session_code)
         
         logger.info(f"[POLL] Status result: {status_result}")
         
@@ -1637,7 +1671,7 @@ async def poll_login_status(context: ContextTypes.DEFAULT_TYPE, user_id: int, we
                         logger.error(f"Error updating message: {e}")
                 
                 async def next_poll_job(ctx):
-                    await poll_login_status(ctx, user_id, website, website_index)
+                    await poll_login_status(ctx, user_id, website, website_index, session_code)
                 
                 context.job_queue.run_once(next_poll_job, when=5)
             else:
@@ -1653,12 +1687,12 @@ async def poll_login_status(context: ContextTypes.DEFAULT_TYPE, user_id: int, we
             if "success" in status_msg or "login success" in status_msg:
                 logger.info(f"[POLL] Detected success in message: {status_msg}")
                 status_result["status"] = "success"
-                await poll_login_status(context, user_id, website, website_index)
+                await poll_login_status(context, user_id, website, website_index, session_code)
                 return
             
             logger.warning(f"[POLL] Status check returned: {status_result}, continuing to poll...")
             async def retry_poll_job(ctx):
-                await poll_login_status(ctx, user_id, website, website_index)
+                await poll_login_status(ctx, user_id, website, website_index, session_code)
             
             context.job_queue.run_once(retry_poll_job, when=5)
     except Exception as e:
@@ -1680,6 +1714,15 @@ async def generate_and_send_next(context: ContextTypes.DEFAULT_TYPE, user_id: in
                 "poll_count": 0
             }
         
+        # Get session code for this user and website
+        if user_id not in user_website_sessions or website_index not in user_website_sessions.get(user_id, {}):
+            # Generate new session code if not exists
+            if user_id not in user_website_sessions:
+                user_website_sessions[user_id] = {}
+            user_website_sessions[user_id][website_index] = generate_session_code()
+        
+        session_code = user_website_sessions[user_id][website_index]
+        
         # Get completed count for progress bar
         completed_count = len(user_completed_websites.get(user_id, []))
         progress = '✅' * completed_count + '⬜' * (4 - completed_count)
@@ -1688,8 +1731,8 @@ async def generate_and_send_next(context: ContextTypes.DEFAULT_TYPE, user_id: in
         phone = user_sessions[user_id].get("current_phone_number", "")
         phone_display = format_phone_number(phone) if phone else ""
         
-        logger.info(f"[GENERATE_NEXT] Generating QR code for {website['name']}...")
-        qr_image, error = generate_qr_code(website)
+        logger.info(f"[GENERATE_NEXT] Generating QR code for {website['name']} with session {session_code[:4]}...")
+        qr_image, error = generate_qr_code(website, session_code)
         
         if error:
             logger.error(f"[GENERATE_NEXT] Error generating QR: {error}")
@@ -1757,8 +1800,8 @@ async def generate_and_send_next(context: ContextTypes.DEFAULT_TYPE, user_id: in
         logger.info(f"[GENERATE_NEXT] Session updated, starting polling in 5 seconds...")
         
         async def start_poll_job(ctx):
-            logger.info(f"[POLL_JOB] Starting poll job for user {user_id}, website: {website['name']}")
-            await poll_login_status(ctx, user_id, website, website_index)
+            logger.info(f"[POLL_JOB] Starting poll job for user {user_id}, website: {website['name']}, session: {session_code[:4]}...")
+            await poll_login_status(ctx, user_id, website, website_index, session_code)
         
         context.job_queue.run_once(start_poll_job, when=5)
         
@@ -1791,8 +1834,17 @@ async def generate_and_update_same_message(context: ContextTypes.DEFAULT_TYPE, u
                 "poll_count": 0
             }
         
-        logger.info(f"[UPDATE_SAME] Generating QR code for {website['name']}...")
-        qr_image, error = generate_qr_code(website)
+        # Get session code for this user and website
+        if user_id not in user_website_sessions or website_index not in user_website_sessions.get(user_id, {}):
+            # Generate new session code if not exists
+            if user_id not in user_website_sessions:
+                user_website_sessions[user_id] = {}
+            user_website_sessions[user_id][website_index] = generate_session_code()
+        
+        session_code = user_website_sessions[user_id][website_index]
+        
+        logger.info(f"[UPDATE_SAME] Generating QR code for {website['name']} with session {session_code[:4]}...")
+        qr_image, error = generate_qr_code(website, session_code)
         
         if error:
             logger.error(f"[UPDATE_SAME] Error generating QR: {error}")
@@ -1855,8 +1907,8 @@ async def generate_and_update_same_message(context: ContextTypes.DEFAULT_TYPE, u
         logger.info(f"[UPDATE_SAME] Session updated, starting polling in 5 seconds...")
         
         async def start_poll_job(ctx):
-            logger.info(f"[POLL_JOB] Starting poll job for user {user_id}, website: {website['name']}")
-            await poll_login_status(ctx, user_id, website, website_index)
+            logger.info(f"[POLL_JOB] Starting poll job for user {user_id}, website: {website['name']}, session: {session_code[:4]}...")
+            await poll_login_status(ctx, user_id, website, website_index, session_code)
         
         context.job_queue.run_once(start_poll_job, when=5)
         
