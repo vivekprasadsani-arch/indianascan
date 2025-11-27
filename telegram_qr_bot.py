@@ -728,13 +728,14 @@ def create_scraper_session():
         impersonate = random.choice(BROWSER_IMPERSONATIONS)
         session = CurlSession(impersonate=impersonate)
         
-        # Set proxy if needed (with unique fingerprint, proxy is OK now!)
-        session.proxies = {
-            'http': PROXY_URL,
-            'https': PROXY_URL
-        }
+        # NO PROXY - curl_cffi has real browser fingerprint, should work without proxy!
+        # Proxy disabled to test direct connection first
+        # session.proxies = {
+        #     'http': PROXY_URL,
+        #     'https': PROXY_URL
+        # }
         
-        logger.info(f"[SESSION] Created curl_cffi session - impersonating: {impersonate}")
+        logger.info(f"[SESSION] Created curl_cffi session - impersonating: {impersonate} (NO PROXY)")
         return session
     else:
         # Fallback to cloudscraper if curl_cffi not available
@@ -831,12 +832,13 @@ def get_or_create_user_session(user_id, website_index, website):
         impersonate = BROWSER_IMPERSONATIONS[fingerprint_index]
         
         session = CurlSession(impersonate=impersonate)
-        session.proxies = {
-            'http': PROXY_URL,
-            'https': PROXY_URL
-        }
+        # NO PROXY - real browser fingerprint should work without proxy
+        # session.proxies = {
+        #     'http': PROXY_URL,
+        #     'https': PROXY_URL
+        # }
         
-        logger.info(f"[SESSION] NEW session for user {user_id}, website {website_index} - fingerprint: {impersonate}")
+        logger.info(f"[SESSION] NEW session for user {user_id}, website {website_index} - fingerprint: {impersonate} (NO PROXY)")
     else:
         # Fallback
         session = create_scraper_session()
