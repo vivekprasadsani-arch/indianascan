@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # ==================== CONFIGURATION ====================
 
 # Telegram Bot Token
-BOT_TOKEN = "8419074330:AAFxTHh-H1s2Q8u2r1qxoTzzawp4JGL_V34"
+BOT_TOKEN = "8419074330:AAFBQFRK3-bKqwwTlwvnYbbjsOkmvT8UJqU"
 
 # Admin Telegram User ID
 ADMIN_USER_ID = 7325836764
@@ -59,6 +59,13 @@ ADMIN_USER_ID = 7325836764
 # Supabase Configuration
 SUPABASE_URL = "https://sgnnqvfoajqsfdyulolm.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnbm5xdmZvYWpxc2ZkeXVsb2xtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxNzE1MjcsImV4cCI6MjA3OTc0NzUyN30.dFniV0odaT-7bjs5iQVFQ-N23oqTGMAgQKjswhaHSP4"
+
+# SOCKS5 Proxy Configuration
+PROXY_HOST = "103.166.187.88"
+PROXY_PORT = 11311
+PROXY_USER = "NextG"
+PROXY_PASS = "NextG"
+PROXY_URL = f"socks5://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
 
 # Bangladesh Timezone
 BD_TIMEZONE = pytz.timezone('Asia/Dhaka')
@@ -641,7 +648,7 @@ except:
 
 # Create cloudscraper session (bypasses Cloudflare and anti-bot)
 def create_scraper_session():
-    """Create a new cloudscraper session with random browser profile"""
+    """Create a new cloudscraper session with SOCKS5 proxy and random browser profile"""
     scraper = cloudscraper.create_scraper(
         browser={
             'browser': random.choice(['chrome', 'firefox']),
@@ -650,6 +657,14 @@ def create_scraper_session():
         },
         delay=random.uniform(1, 3)
     )
+    
+    # Set SOCKS5 proxy
+    scraper.proxies = {
+        'http': PROXY_URL,
+        'https': PROXY_URL
+    }
+    
+    logger.info(f"[PROXY] Using SOCKS5 proxy: {PROXY_HOST}:{PROXY_PORT}")
     return scraper
 
 def get_random_user_agent():
