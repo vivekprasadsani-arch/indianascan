@@ -761,6 +761,8 @@ def generate_qr_code(website, user_id, website_index, max_retries=15):
                 return None, f"HTTP Error: {response.status_code}"
             
             generate_data = response.json()
+            logger.info(f"[GENERATE_QR] User {user_id} - Generate response: {json.dumps(generate_data)[:500]}")
+            
             if generate_data.get("code") != 0:
                 error_msg = generate_data.get('msg', 'Unknown error')
                 # Check if site is busy/in use - retry with longer delay
@@ -777,6 +779,11 @@ def generate_qr_code(website, user_id, website_index, max_retries=15):
                         time.sleep(random.uniform(2, 4))
                     continue
                 return None, f"Error: {error_msg}"
+            
+            # Extract session/token from generate response
+            gen_data = generate_data.get("data", {})
+            session_id = gen_data.get("sessionId") or gen_data.get("session_id") or gen_data.get("id") or gen_data.get("token")
+            logger.info(f"[GENERATE_QR] User {user_id} - Session ID from generate: {session_id}")
             
             # Step 2: Wait for QR code generation
             time.sleep(random.uniform(1.5, 3))
@@ -796,8 +803,14 @@ def generate_qr_code(website, user_id, website_index, max_retries=15):
                     if retrieve_data.get("code") == 0:
                         data = retrieve_data.get("data", {})
                         qrcode_array = data.get("qrcode", [])
-                        # Get the unique token from the response if available
-                        qr_token = data.get("token") or data.get("id") or data.get("session_id")
+                        # Get ALL possible unique identifiers from the response
+                        qr_token = (
+                            data.get("token") or data.get("id") or data.get("session_id") or
+                            data.get("sessionId") or data.get("qr_id") or data.get("qrId") or
+                            data.get("uuid") or data.get("key") or session_id
+                        )
+                        logger.info(f"[GENERATE_QR] User {user_id} - Retrieve data keys: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
+                        logger.info(f"[GENERATE_QR] User {user_id} - QR token: {qr_token}, QR array length: {len(qrcode_array) if qrcode_array else 0}")
                         if qrcode_array and len(qrcode_array) > 0:
                             break
                         elif attempt < retrieve_retries - 1:
@@ -832,18 +845,41 @@ def generate_qr_code(website, user_id, website_index, max_retries=15):
             # Step 4: Create QR code image
             qr_data = qrcode_array[0]
             
+            # Extract unique ID from QR data (WhatsApp linking URL)
+            # QR data format might be like: "2@UNIQUE_ID,timestamp,..." or "https://...?code=UNIQUE_ID"
+            qr_unique_id = None
+            if qr_data:
+                # Try to extract ID from QR data string
+                if "," in qr_data:
+                    # Format: "2@ID,timestamp,..." 
+                    parts = qr_data.split(",")
+                    if parts:
+                        qr_unique_id = parts[0].replace("2@", "").replace("1@", "")
+                elif "code=" in qr_data:
+                    # Format: URL with code parameter
+                    import urllib.parse
+                    parsed = urllib.parse.urlparse(qr_data)
+                    params = urllib.parse.parse_qs(parsed.query)
+                    qr_unique_id = params.get("code", [None])[0]
+                else:
+                    # Use first 32 chars as ID
+                    qr_unique_id = qr_data[:32] if len(qr_data) > 32 else qr_data
+            
+            logger.info(f"[GENERATE_QR] User {user_id} - QR unique ID extracted: {qr_unique_id[:20] if qr_unique_id else None}...")
+            
             # Store the session for this user/website for status checking
-            # The qr_data contains the unique WhatsApp linking URL
             if user_id not in user_qr_sessions:
                 user_qr_sessions[user_id] = {}
             user_qr_sessions[user_id][website_index] = {
                 "scraper": scraper,
                 "qr_data": qr_data,
-                "qr_token": qr_token,
+                "qr_token": qr_token or qr_unique_id,
+                "qr_unique_id": qr_unique_id,
+                "session_id": session_id,
                 "headers": headers,
                 "created_at": time.time()
             }
-            logger.info(f"[GENERATE_QR] Stored session for user {user_id}, website {website_index}")
+            logger.info(f"[GENERATE_QR] Stored session for user {user_id}, website {website_index}, token: {qr_token or qr_unique_id}")
             
             qr = QRCode(
                 version=1,
@@ -916,14 +952,23 @@ def check_login_status(website, user_id, website_index):
         status_url = f"{base_url}/login/status"
         status_payload = {"code": code}
         
-        # Add token if available
-        if session_data and session_data.get("qr_token"):
-            status_payload["token"] = session_data["qr_token"]
+        # Add ALL possible session identifiers
+        if session_data:
+            if session_data.get("qr_token"):
+                status_payload["token"] = session_data["qr_token"]
+            if session_data.get("session_id"):
+                status_payload["sessionId"] = session_data["session_id"]
+                status_payload["session_id"] = session_data["session_id"]
+            if session_data.get("qr_unique_id"):
+                status_payload["qrId"] = session_data["qr_unique_id"]
+                status_payload["id"] = session_data["qr_unique_id"]
         
+        logger.info(f"[CHECK_STATUS] User {user_id} - Payload: {json.dumps(status_payload)[:200]}")
         response = scraper.post(status_url, json=status_payload, headers=headers, timeout=30)
         
         if response.status_code == 200:
             status_data = response.json()
+            logger.info(f"[CHECK_STATUS] User {user_id} - Response: {json.dumps(status_data)[:500]}")
             status_code = status_data.get("code")
             msg = status_data.get("msg", "")
             msg_lower = msg.lower() if msg else ""
