@@ -1912,6 +1912,11 @@ def setup_scheduled_jobs(application: Application):
     """Setup scheduled jobs"""
     job_queue = application.job_queue
     
+    if job_queue is None:
+        logger.warning("JobQueue not available. Scheduled jobs will not run.")
+        logger.warning("Install with: pip install 'python-telegram-bot[job-queue]'")
+        return
+    
     # Daily reset at 8:00 AM Bangladesh time
     reset_time = dt_time(hour=DAILY_RESET_HOUR, minute=DAILY_RESET_MINUTE, tzinfo=BD_TIMEZONE)
     job_queue.run_daily(daily_reset_job, time=reset_time, name="daily_reset")
