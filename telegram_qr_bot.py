@@ -159,6 +159,148 @@ WEBSITES = [
 # Format: {user_id: {website_index: {"qr_token": str, "scraper": scraper_instance}}}
 user_qr_sessions = {}
 
+# Browser Profiles - Separate session for each user (like browser profiles)
+# Each user gets their own isolated session with unique cookies, headers, fingerprint
+# Format: {user_id: {"scraper": scraper, "fingerprint": str, "created_at": timestamp}}
+user_browser_profiles = {}
+
+# Website locks - only ONE user can scan each website at a time
+# Format: {website_index: {"user_id": int, "phone": str, "locked_at": timestamp}}
+website_locks = {}
+
+# Queue for users waiting to scan a website
+# Format: {website_index: [(user_id, phone, context), ...]}
+website_queue = {0: [], 1: [], 2: [], 3: []}
+
+import hashlib
+import uuid
+
+def generate_browser_fingerprint(user_id):
+    """Generate a unique browser fingerprint for each user"""
+    unique_string = f"{user_id}-{uuid.uuid4()}-{time.time()}"
+    fingerprint = hashlib.md5(unique_string.encode()).hexdigest()[:16]
+    return fingerprint
+
+def get_user_browser_profile(user_id):
+    """Get or create a unique browser profile for a user (like Chrome profiles)"""
+    
+    # Check if user already has a profile and it's not too old (max 1 hour)
+    if user_id in user_browser_profiles:
+        profile = user_browser_profiles[user_id]
+        age = time.time() - profile.get("created_at", 0)
+        if age < 3600:  # Profile valid for 1 hour
+            logger.info(f"[PROFILE] Reusing existing browser profile for user {user_id}")
+            return profile["scraper"], profile["fingerprint"]
+    
+    # Create new browser profile
+    fingerprint = generate_browser_fingerprint(user_id)
+    
+    # Create scraper with unique browser signature
+    browsers = ['chrome', 'firefox']
+    platforms = ['windows', 'linux', 'darwin']
+    
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': random.choice(browsers),
+            'platform': random.choice(platforms),
+            'mobile': False
+        },
+        delay=random.uniform(1, 2)
+    )
+    
+    # Set proxy
+    scraper.proxies = {
+        'http': PROXY_URL,
+        'https': PROXY_URL
+    }
+    
+    # Store profile
+    user_browser_profiles[user_id] = {
+        "scraper": scraper,
+        "fingerprint": fingerprint,
+        "created_at": time.time()
+    }
+    
+    logger.info(f"[PROFILE] Created NEW browser profile for user {user_id}, fingerprint: {fingerprint}")
+    return scraper, fingerprint
+
+def get_user_headers(user_id, website, fingerprint):
+    """Generate unique headers for each user's browser profile"""
+    base_url = website.get('base_url', '')
+    domain = website.get('domain', base_url.split('/')[2] if '//' in base_url else '')
+    
+    # Use fingerprint to create consistent but unique headers per user
+    user_agent_seed = int(fingerprint[:8], 16) % 100
+    
+    user_agents = [
+        f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{120 + user_agent_seed % 10}.0.0.0 Safari/537.36",
+        f"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{115 + user_agent_seed % 10}.0) Gecko/20100101 Firefox/{115 + user_agent_seed % 10}.0",
+        f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{120 + user_agent_seed % 10}.0.0.0 Safari/537.36",
+    ]
+    
+    selected_ua = user_agents[user_agent_seed % len(user_agents)]
+    
+    return {
+        "content-type": "application/json",
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "en-US,en;q=0.9",
+        "user-agent": selected_ua,
+        "origin": base_url.rsplit('/', 3)[0] if base_url else "",
+        "referer": website.get('url', base_url),
+        "sec-ch-ua": f'"Chromium";v="{120 + user_agent_seed % 10}", "Not_A Brand";v="8"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "x-client-id": fingerprint,  # Unique identifier per user
+        "x-request-id": str(uuid.uuid4()),  # Unique per request
+    }
+
+def reset_user_browser_profile(user_id):
+    """Reset/delete a user's browser profile to start fresh"""
+    if user_id in user_browser_profiles:
+        del user_browser_profiles[user_id]
+        logger.info(f"[PROFILE] Reset browser profile for user {user_id}")
+
+def is_website_locked(website_index):
+    """Check if a website is currently locked by another user"""
+    if website_index not in website_locks:
+        return False, None
+    
+    lock = website_locks[website_index]
+    # Auto-expire locks after 3 minutes (180 seconds)
+    if time.time() - lock.get("locked_at", 0) > 180:
+        del website_locks[website_index]
+        return False, None
+    
+    return True, lock
+
+def lock_website(website_index, user_id, phone):
+    """Lock a website for exclusive use by a user"""
+    website_locks[website_index] = {
+        "user_id": user_id,
+        "phone": phone,
+        "locked_at": time.time()
+    }
+    logger.info(f"[LOCK] Website {website_index} locked by user {user_id} for phone {phone}")
+
+def unlock_website(website_index, user_id=None):
+    """Unlock a website (only if locked by the same user, or force unlock)"""
+    if website_index in website_locks:
+        lock = website_locks[website_index]
+        if user_id is None or lock.get("user_id") == user_id:
+            del website_locks[website_index]
+            logger.info(f"[UNLOCK] Website {website_index} unlocked")
+            return True
+    return False
+
+def get_lock_owner(website_index):
+    """Get the user who currently has the website locked"""
+    if website_index in website_locks:
+        return website_locks[website_index].get("user_id")
+    return None
+
 # Headers for API requests
 HEADERS = {
     "content-type": "application/json",
@@ -721,7 +863,7 @@ def get_headers_for_website(website):
 
 
 def generate_qr_code(website, user_id, website_index, max_retries=5):
-    """Generate QR code for a website with retry mechanism using cloudscraper
+    """Generate QR code for a website with retry mechanism using user's browser profile
     
     Args:
         website: Website configuration dict
@@ -735,11 +877,12 @@ def generate_qr_code(website, user_id, website_index, max_retries=5):
     base_url = website['base_url']
     code = website['code']  # Use the original referral code
     
+    # Get user's unique browser profile (like separate Chrome profile)
+    scraper, fingerprint = get_user_browser_profile(user_id)
+    headers = get_user_headers(user_id, website, fingerprint)
+    
     for retry in range(max_retries):
         try:
-            # Create fresh scraper session for this user/website combination
-            scraper = create_scraper_session()
-            headers = get_headers_for_website(website)
             
             # Add random delay to appear more human-like
             time.sleep(random.uniform(0.5, 2))
@@ -875,7 +1018,7 @@ def generate_qr_code(website, user_id, website_index, max_retries=5):
 
 
 def check_login_status(website, user_id, website_index):
-    """Check login status for a website using the user's stored session
+    """Check login status for a website using the user's browser profile
     
     Args:
         website: Website configuration dict
@@ -886,27 +1029,26 @@ def check_login_status(website, user_id, website_index):
         base_url = website['base_url']
         code = website['code']  # Use the original referral code
         
-        # Get the stored session for this user/website
+        # Use user's browser profile (same profile used for QR generation)
+        scraper, fingerprint = get_user_browser_profile(user_id)
+        headers = get_user_headers(user_id, website, fingerprint)
+        
+        logger.info(f"[CHECK_STATUS] Using browser profile for user {user_id}, fingerprint: {fingerprint[:8]}...")
+        
+        # Get any stored session data (for token)
         session_data = None
         if user_id in user_qr_sessions and website_index in user_qr_sessions[user_id]:
             session_data = user_qr_sessions[user_id][website_index]
         
-        # Use the stored scraper session if available, otherwise create new
-        if session_data and session_data.get("scraper"):
-            scraper = session_data["scraper"]
-            headers = session_data.get("headers") or get_headers_for_website(website)
-            logger.info(f"[CHECK_STATUS] Using stored session for user {user_id}, website {website_index}")
-        else:
-            scraper = create_scraper_session()
-            headers = get_headers_for_website(website)
-            logger.info(f"[CHECK_STATUS] Created new session for user {user_id}, website {website_index}")
-        
         status_url = f"{base_url}/login/status"
         status_payload = {"code": code}
         
-        # Add token if available
+        # Add token and fingerprint if available
         if session_data and session_data.get("qr_token"):
             status_payload["token"] = session_data["qr_token"]
+        
+        # Add fingerprint to help server identify the session
+        status_payload["client_id"] = fingerprint
         
         response = scraper.post(status_url, json=status_payload, headers=headers, timeout=30)
         
@@ -1459,9 +1601,24 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Get current website
     current_index = 0
     website = WEBSITES[current_index]
+    site_name = get_site_name(current_index)
+    
+    # Check if website is locked by another user
+    is_locked, lock_info = is_website_locked(current_index)
+    if is_locked and lock_info.get("user_id") != user_id:
+        # Website is in use by another user
+        await update.message.reply_text(
+            f"⏳ {site_name} is currently in use by another user.\n\n"
+            f"Please wait 1-2 minutes and try again.\n"
+            f"📱 Your number: {format_phone_number(phone)}",
+            reply_markup=get_keyboard_for_user(user_id)
+        )
+        return
+    
+    # Lock the website for this user
+    lock_website(current_index, user_id, phone)
     
     # Send loading message first
-    site_name = get_site_name(current_index)
     loading_msg = await update.message.reply_text(
         f"🔄 Generating QR code for {site_name}...\n"
         f"📱 Phone: {format_phone_number(phone)}"
@@ -1471,6 +1628,8 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
     qr_image, error = generate_qr_code(website, user_id, current_index)
     
     if error:
+        # Unlock website on error
+        unlock_website(current_index, user_id)
         await loading_msg.edit_text(
             f"❌ Error: {error}\n\nPlease send your phone number again.",
             reply_markup=None
@@ -1542,6 +1701,10 @@ async def poll_login_status(context: ContextTypes.DEFAULT_TYPE, user_id: int, we
             
             if website_index not in user_completed_websites[user_id]:
                 user_completed_websites[user_id].append(website_index)
+                
+                # UNLOCK the website - user finished with this site
+                unlock_website(website_index, user_id)
+                logger.info(f"[POLL] Unlocked website {website_index} after success")
                 
                 # Add website completion to database
                 phone_number_id = user_sessions[user_id].get("current_phone_number_id")
@@ -1706,6 +1869,10 @@ async def poll_login_status(context: ContextTypes.DEFAULT_TYPE, user_id: int, we
                 context.job_queue.run_once(next_poll_job, when=5)
             else:
                 user_sessions[user_id]["is_polling"] = False
+                # UNLOCK the website on timeout
+                unlock_website(website_index, user_id)
+                logger.info(f"[POLL] Unlocked website {website_index} after timeout")
+                
                 site_name = get_site_name(website_index)
                 await context.bot.send_message(
                     chat_id=user_id,
@@ -1744,20 +1911,36 @@ async def generate_and_send_next(context: ContextTypes.DEFAULT_TYPE, user_id: in
                 "poll_count": 0
             }
         
-        # Get completed count for progress bar
-        completed_count = len(user_completed_websites.get(user_id, []))
-        progress = '✅' * completed_count + '⬜' * (4 - completed_count)
-        
         # Get phone number for display
         phone = user_sessions[user_id].get("current_phone_number", "")
         phone_display = format_phone_number(phone) if phone else ""
+        site_name = get_site_name(website_index)
+        
+        # Check if website is locked by another user
+        is_locked, lock_info = is_website_locked(website_index)
+        if is_locked and lock_info.get("user_id") != user_id:
+            # Website is in use - notify user
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"⏳ {site_name} is currently in use.\nPlease wait 1-2 minutes...",
+                reply_markup=get_keyboard_for_user(user_id)
+            )
+            return
+        
+        # Lock the website for this user
+        lock_website(website_index, user_id, phone)
+        
+        # Get completed count for progress bar
+        completed_count = len(user_completed_websites.get(user_id, []))
+        progress = '✅' * completed_count + '⬜' * (4 - completed_count)
         
         logger.info(f"[GENERATE_NEXT] Generating QR code for {website['name']} (user {user_id})...")
         qr_image, error = generate_qr_code(website, user_id, website_index)
         
         if error:
             logger.error(f"[GENERATE_NEXT] Error generating QR: {error}")
-            site_name = get_site_name(website_index)
+            # Unlock on error
+            unlock_website(website_index, user_id)
             last_msg_id = user_sessions[user_id].get("last_message_id")
             if last_msg_id:
                 try:
