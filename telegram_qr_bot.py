@@ -168,13 +168,113 @@ WEBSITES = [
 # Format: {user_id: {website_index: {"qr_token": str, "scraper": scraper_instance}}}
 user_qr_sessions = {}
 
-# REMOVED: Queue system not needed - API supports concurrent users!
-# The key is proper SESSION ISOLATION (cookies) per user, not queuing.
-# Each user gets their own isolated session with cookies maintained throughout.
 import asyncio
 
-# Session cleanup interval
-SESSION_CLEANUP_INTERVAL = 300  # 5 minutes
+# ==================== QUEUE SYSTEM ====================
+# Each website can only serve ONE user at a time
+# Other users wait in queue - first come, first served!
+
+# Queue structure for each website
+# Format: {website_index: {"active_user": user_id or None, "queue": [user_id, ...], "lock": asyncio.Lock}}
+website_queues = {}
+for i in range(4):  # 4 websites
+    website_queues[i] = {
+        "active_user": None,
+        "queue": [],
+        "lock": None,  # Will be created when event loop is running
+        "start_time": None
+    }
+
+# Maximum time a user can hold a website (2 minutes)
+WEBSITE_TIMEOUT = 120
+
+def get_or_create_lock(website_index):
+    """Get or create asyncio lock for a website"""
+    if website_queues[website_index]["lock"] is None:
+        website_queues[website_index]["lock"] = asyncio.Lock()
+    return website_queues[website_index]["lock"]
+
+async def acquire_website_lock(website_index: int, user_id: int, context=None) -> tuple:
+    """
+    Try to acquire a website for QR generation.
+    Returns (success, position_in_queue)
+    
+    - If website is free: user gets it immediately
+    - If website is busy: user waits in queue (returns False, position)
+    """
+    lock = get_or_create_lock(website_index)
+    
+    async with lock:
+        queue_data = website_queues[website_index]
+        current_time = time.time()
+        
+        # Check if current user's session has timed out
+        if queue_data["active_user"] is not None and queue_data["start_time"]:
+            if current_time - queue_data["start_time"] > WEBSITE_TIMEOUT:
+                logger.info(f"[QUEUE] Timeout for user {queue_data['active_user']} on site {website_index}")
+                queue_data["active_user"] = None
+                queue_data["start_time"] = None
+        
+        # If website is free, this user gets it
+        if queue_data["active_user"] is None:
+            queue_data["active_user"] = user_id
+            queue_data["start_time"] = current_time
+            # Remove from queue if was waiting
+            if user_id in queue_data["queue"]:
+                queue_data["queue"].remove(user_id)
+            logger.info(f"[QUEUE] ✅ User {user_id} acquired Site {website_index + 1}")
+            return True, 0
+        
+        # If this user already has the website
+        if queue_data["active_user"] == user_id:
+            queue_data["start_time"] = current_time  # Refresh timeout
+            return True, 0
+        
+        # Website is busy - add to queue
+        if user_id not in queue_data["queue"]:
+            queue_data["queue"].append(user_id)
+        position = queue_data["queue"].index(user_id) + 1
+        logger.info(f"[QUEUE] ⏳ User {user_id} waiting at position {position} for Site {website_index + 1}")
+        return False, position
+
+async def release_website_lock(website_index: int, user_id: int, context=None):
+    """
+    Release a website after QR code process is complete.
+    Automatically gives access to next user in queue.
+    Returns the next user_id if any, or None.
+    """
+    lock = get_or_create_lock(website_index)
+    
+    async with lock:
+        queue_data = website_queues[website_index]
+        
+        if queue_data["active_user"] == user_id:
+            logger.info(f"[QUEUE] 🔓 User {user_id} released Site {website_index + 1}")
+            queue_data["active_user"] = None
+            queue_data["start_time"] = None
+            
+            # Give to next user in queue
+            if queue_data["queue"]:
+                next_user = queue_data["queue"].pop(0)
+                queue_data["active_user"] = next_user
+                queue_data["start_time"] = time.time()
+                logger.info(f"[QUEUE] ➡️ Site {website_index + 1} given to next user: {next_user}")
+                return next_user
+        
+        return None
+
+def get_queue_position(website_index: int, user_id: int) -> int:
+    """Get user's position in queue. 0 = has access, 1+ = waiting, -1 = not in queue"""
+    queue_data = website_queues[website_index]
+    if queue_data["active_user"] == user_id:
+        return 0
+    if user_id in queue_data["queue"]:
+        return queue_data["queue"].index(user_id) + 1
+    return -1
+
+def get_queue_length(website_index: int) -> int:
+    """Get total users waiting for a website"""
+    return len(website_queues[website_index]["queue"])
 
 async def cleanup_old_sessions():
     """Clean up sessions older than 10 minutes"""
@@ -189,28 +289,11 @@ async def cleanup_old_sessions():
             if current_time - created_at > 600:  # 10 minutes
                 del user_qr_sessions[user_id][website_index]
                 cleaned += 1
-        # Remove empty user dict
         if not user_qr_sessions[user_id]:
             del user_qr_sessions[user_id]
     
     if cleaned > 0:
         logger.info(f"[SESSION_CLEANUP] Cleaned up {cleaned} old sessions")
-
-async def acquire_website_lock(website_index: int, user_id: int) -> tuple:
-    """NO QUEUE NEEDED - All users proceed immediately with isolated sessions.
-    Returns (True, 0) always - no waiting!
-    """
-    logger.info(f"[SESSION] User {user_id} starting website {website_index} - NO queue, using isolated session")
-    return True, 0
-
-async def release_website_lock(website_index: int, user_id: int):
-    """No-op - just log for debugging. Queue system removed!"""
-    logger.info(f"[SESSION] User {user_id} finished with website {website_index}")
-
-
-def get_queue_position(website_index: int, user_id: int) -> int:
-    """No queue - always return 0 (no waiting)"""
-    return 0
 
 # Headers for API requests
 HEADERS = {
@@ -1685,30 +1768,40 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Try to acquire lock for this website
     got_lock, queue_position = await acquire_website_lock(current_index, user_id)
     
+    # Show progress message (same message whether waiting or not)
+    progress_bar = "▓▓▓░░░░░░░"  # Initial progress
+    loading_msg = await update.message.reply_text(
+        f"📱 {format_phone_number(phone)}\n\n"
+        f"🔄 Generating QR Code for {site_name}...\n"
+        f"{progress_bar}\n\n"
+        f"⏳ Please wait...",
+        reply_markup=get_keyboard_for_user(user_id)
+    )
+    user_sessions[user_id]["last_message_id"] = loading_msg.message_id
+    
     if not got_lock:
-        # User needs to wait in queue
-        loading_msg = await update.message.reply_text(
-            f"📱 {format_phone_number(phone)}\n\n"
-            f"⏳ {site_name} is busy.\n"
-            f"🔢 Queue position: #{queue_position}\n\n"
-            f"Please wait... Auto-refreshing every 5 seconds.",
-            reply_markup=get_keyboard_for_user(user_id)
-        )
-        user_sessions[user_id]["last_message_id"] = loading_msg.message_id
+        # User needs to wait in queue - but we don't tell them "busy"
+        # Just show "generating" and wait for their turn
         user_sessions[user_id]["waiting_for_lock"] = True
+        user_sessions[user_id]["phone_for_queue"] = phone
         
         # Start checking for lock availability
         async def check_queue_job(ctx):
-            await check_and_proceed_from_queue(ctx, user_id, current_index)
+            await check_and_proceed_from_queue(ctx, user_id, current_index, loading_msg.message_id)
         
-        context.job_queue.run_once(check_queue_job, when=5)
+        context.job_queue.run_once(check_queue_job, when=3)
         return
     
-    # Got the lock - proceed with QR generation
-    loading_msg = await update.message.reply_text(
-        f"🔄 Generating QR code for {site_name}...\n"
-        f"📱 Phone: {format_phone_number(phone)}"
-    )
+    # Got lock immediately - update progress message
+    try:
+        await loading_msg.edit_text(
+            f"📱 {format_phone_number(phone)}\n\n"
+            f"🔄 Generating QR Code for {site_name}...\n"
+            f"▓▓▓▓▓▓▓▓▓▓\n\n"
+            f"✨ Almost ready..."
+        )
+    except:
+        pass
     
     # Generate QR code - session is stored per user/website automatically
     qr_image, error = generate_qr_code(website, user_id, current_index)
@@ -1717,7 +1810,7 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
         await release_website_lock(current_index, user_id)
         await loading_msg.edit_text(
             f"❌ Error: {error}\n\nPlease send your phone number again.",
-            reply_markup=None
+            reply_markup=get_keyboard_for_user(user_id)
         )
         return
     
@@ -1748,8 +1841,10 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.job_queue.run_once(poll_job, when=5)
 
 
-async def check_and_proceed_from_queue(context: ContextTypes.DEFAULT_TYPE, user_id: int, website_index: int):
-    """Check if user can proceed from queue and start QR generation"""
+async def check_and_proceed_from_queue(context: ContextTypes.DEFAULT_TYPE, user_id: int, website_index: int, msg_id: int = None):
+    """Check if user can proceed from queue and start QR generation.
+    Shows only progress bar - no 'busy' message to user!
+    """
     try:
         if user_id not in user_sessions:
             return
@@ -1761,10 +1856,31 @@ async def check_and_proceed_from_queue(context: ContextTypes.DEFAULT_TYPE, user_
         site_name = get_site_name(website_index)
         phone = user_sessions[user_id].get("current_phone_number", "")
         phone_display = format_phone_number(phone) if phone else ""
-        last_msg_id = user_sessions[user_id].get("last_message_id")
+        last_msg_id = msg_id or user_sessions[user_id].get("last_message_id")
+        
+        # Get progress animation frame
+        wait_count = user_sessions[user_id].get("wait_count", 0) + 1
+        user_sessions[user_id]["wait_count"] = wait_count
+        
+        # Animated progress bar
+        progress_frames = [
+            "▓░░░░░░░░░",
+            "▓▓░░░░░░░░",
+            "▓▓▓░░░░░░░",
+            "▓▓▓▓░░░░░░",
+            "▓▓▓▓▓░░░░░",
+            "▓▓▓▓▓▓░░░░",
+            "▓▓▓▓▓▓▓░░░",
+            "▓▓▓▓▓▓▓▓░░",
+            "▓▓▓▓▓▓▓▓▓░",
+            "░▓▓▓▓▓▓▓▓▓",
+            "░░▓▓▓▓▓▓▓▓",
+            "░░░▓▓▓▓▓▓▓",
+        ]
+        progress_bar = progress_frames[wait_count % len(progress_frames)]
         
         if not got_lock:
-            # Still waiting - update queue position
+            # Still waiting - show animated progress (no "busy" message!)
             if last_msg_id:
                 try:
                     await context.bot.edit_message_text(
@@ -1772,32 +1888,38 @@ async def check_and_proceed_from_queue(context: ContextTypes.DEFAULT_TYPE, user_
                         message_id=last_msg_id,
                         text=(
                             f"📱 {phone_display}\n\n"
-                            f"⏳ {site_name} is busy.\n"
-                            f"🔢 Queue position: #{queue_position}\n\n"
-                            f"Please wait... Auto-refreshing every 5 seconds."
+                            f"🔄 Generating QR Code for {site_name}...\n"
+                            f"{progress_bar}\n\n"
+                            f"⏳ Please wait..."
                         ),
                         reply_markup=get_keyboard_for_user(user_id)
                     )
                 except:
                     pass
             
-            # Check again in 5 seconds
+            # Check again in 3 seconds
             async def check_again(ctx):
-                await check_and_proceed_from_queue(ctx, user_id, website_index)
+                await check_and_proceed_from_queue(ctx, user_id, website_index, last_msg_id)
             
-            context.job_queue.run_once(check_again, when=5)
+            context.job_queue.run_once(check_again, when=3)
             return
         
         # Got the lock! Generate QR code
         user_sessions[user_id]["waiting_for_lock"] = False
+        user_sessions[user_id]["wait_count"] = 0
         
-        # Update message to show generating
+        # Update message to show generating (almost done!)
         if last_msg_id:
             try:
                 await context.bot.edit_message_text(
                     chat_id=user_id,
                     message_id=last_msg_id,
-                    text=f"🔄 Generating QR code for {site_name}...\n📱 Phone: {phone_display}"
+                    text=(
+                        f"📱 {phone_display}\n\n"
+                        f"🔄 Generating QR Code for {site_name}...\n"
+                        f"▓▓▓▓▓▓▓▓▓▓\n\n"
+                        f"✨ Almost ready..."
+                    )
                 )
             except:
                 pass
@@ -2121,7 +2243,15 @@ async def generate_and_send_next(context: ContextTypes.DEFAULT_TYPE, user_id: in
         got_lock, queue_position = await acquire_website_lock(website_index, user_id)
         
         if not got_lock:
-            # User needs to wait in queue
+            # User needs to wait in queue - show progress bar, not "busy"
+            wait_count = user_sessions[user_id].get("wait_count_next", 0) + 1
+            user_sessions[user_id]["wait_count_next"] = wait_count
+            
+            # Animated progress bar
+            progress_frames = ["▓░░░░░░░░░", "▓▓░░░░░░░░", "▓▓▓░░░░░░░", "▓▓▓▓░░░░░░", 
+                              "▓▓▓▓▓░░░░░", "▓▓▓▓▓▓░░░░", "▓▓▓▓▓▓▓░░░", "▓▓▓▓▓▓▓▓░░"]
+            progress_bar = progress_frames[wait_count % len(progress_frames)]
+            
             last_msg_id = user_sessions[user_id].get("last_message_id")
             if last_msg_id:
                 try:
@@ -2130,22 +2260,25 @@ async def generate_and_send_next(context: ContextTypes.DEFAULT_TYPE, user_id: in
                         message_id=last_msg_id,
                         caption=(
                             f"📱 {phone_display}\n\n"
-                            f"⏳ {site_name} is busy.\n"
-                            f"🔢 Queue position: #{queue_position}\n\n"
+                            f"🔄 Generating QR Code for {site_name}...\n"
+                            f"{progress_bar}\n\n"
                             f"Progress: [{progress}] {completed_count}/4\n"
-                            f"Please wait... Auto-refreshing."
+                            f"⏳ Please wait..."
                         ),
                         reply_markup=None
                     )
                 except:
                     pass
             
-            # Check queue again in 5 seconds
+            # Check queue again in 3 seconds
             async def check_queue_next(ctx):
                 await generate_and_send_next(ctx, user_id, website, website_index)
             
-            context.job_queue.run_once(check_queue_next, when=5)
+            context.job_queue.run_once(check_queue_next, when=3)
             return
+        
+        # Got lock - reset wait count
+        user_sessions[user_id]["wait_count_next"] = 0
         
         logger.info(f"[GENERATE_NEXT] Generating QR code for {website['name']} (user {user_id})...")
         qr_image, error = generate_qr_code(website, user_id, website_index)
