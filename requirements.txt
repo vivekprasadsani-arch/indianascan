@@ -4,4 +4,6 @@ Pillow>=10.0.0
 python-telegram-bot[job-queue]>=20.0
 supabase>=2.0.0
 pytz>=2023.3
+cloudscraper>=1.2.71
+fake-useragent>=1.4.0
 

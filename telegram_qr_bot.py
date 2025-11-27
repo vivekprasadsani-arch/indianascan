@@ -8,6 +8,7 @@ import signal
 import sys
 import os
 import threading
+import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, time as dt_time
 from qrcode import QRCode
@@ -18,6 +19,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 import logging
 import pytz
 from supabase import create_client, Client
+import cloudscraper
+from fake_useragent import UserAgent
 
 # ==================== HEALTH CHECK SERVER (for Render) ====================
 
@@ -630,17 +633,60 @@ async def get_all_approved_users():
 
 # ==================== QR CODE FUNCTIONS ====================
 
+# Initialize UserAgent for random user agents
+try:
+    ua = UserAgent()
+except:
+    ua = None
+
+# Create cloudscraper session (bypasses Cloudflare and anti-bot)
+def create_scraper_session():
+    """Create a new cloudscraper session with random browser profile"""
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': random.choice(['chrome', 'firefox']),
+            'platform': random.choice(['windows', 'linux', 'darwin']),
+            'mobile': False
+        },
+        delay=random.uniform(1, 3)
+    )
+    return scraper
+
+def get_random_user_agent():
+    """Get a random user agent"""
+    if ua:
+        try:
+            return ua.random
+        except:
+            pass
+    # Fallback user agents
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.76"
+    ]
+    return random.choice(user_agents)
+
 def get_headers_for_website(website):
     """Get headers customized for each website"""
     # Extract domain from base_url
     domain = website['base_url'].split('/')[2]  # e.g., earnbro.net
+    user_agent = get_random_user_agent()
+    
+    # Randomize Chrome version
+    chrome_version = random.randint(118, 122)
     
     return {
         "content-type": "application/json",
         "accept": "application/json, text/plain, */*",
-        "accept-language": "en-US,en;q=0.9",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "accept-language": "en-US,en;q=0.9,bn;q=0.8",
+        "accept-encoding": "gzip, deflate, br",
+        "user-agent": user_agent,
+        "sec-ch-ua": f'"Not_A Brand";v="8", "Chromium";v="{chrome_version}", "Google Chrome";v="{chrome_version}"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
         "sec-fetch-dest": "empty",
@@ -648,29 +694,38 @@ def get_headers_for_website(website):
         "sec-fetch-site": "same-origin",
         "authorization": "Bearer null",
         "origin": f"https://{domain}",
-        "referer": f"https://{domain}/"
+        "referer": f"https://{domain}/",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "x-requested-with": "XMLHttpRequest"
     }
 
 
-def generate_qr_code(website, max_retries=3):
-    """Generate QR code for a website with retry mechanism"""
+def generate_qr_code(website, max_retries=5):
+    """Generate QR code for a website with retry mechanism using cloudscraper"""
     base_url = website['base_url']
     code = website['code']
-    headers = get_headers_for_website(website)
     
     for retry in range(max_retries):
         try:
+            # Create fresh scraper session for each attempt
+            scraper = create_scraper_session()
+            headers = get_headers_for_website(website)
+            
+            # Add random delay to appear more human-like
+            time.sleep(random.uniform(0.5, 2))
+            
             # Step 1: Generate QR code
             generate_url = f"{base_url}/qrcode/generate"
             generate_payload = {"code": code}
             
-            logger.info(f"[GENERATE_QR] Attempt {retry + 1}/{max_retries} for {website['name']}")
-            response = requests.post(generate_url, json=generate_payload, headers=headers, timeout=30)
+            logger.info(f"[GENERATE_QR] Attempt {retry + 1}/{max_retries} for {website['name']} (cloudscraper)")
+            response = scraper.post(generate_url, json=generate_payload, headers=headers, timeout=30)
             
             if response.status_code != 200:
                 if retry < max_retries - 1:
-                    logger.warning(f"[GENERATE_QR] HTTP {response.status_code}, retrying...")
-                    time.sleep(2)
+                    logger.warning(f"[GENERATE_QR] HTTP {response.status_code}, retrying with new session...")
+                    time.sleep(random.uniform(2, 4))
                     continue
                 return None, f"HTTP Error: {response.status_code}"
             
@@ -683,7 +738,7 @@ def generate_qr_code(website, max_retries=3):
                 return None, f"Error: {generate_data.get('msg', 'Unknown error')}"
             
             # Step 2: Wait for QR code generation
-            time.sleep(2)
+            time.sleep(random.uniform(1.5, 3))
             
             # Step 3: Retrieve QR code data
             retrieve_url = f"{base_url}/qrcode/retrieve"
@@ -693,7 +748,7 @@ def generate_qr_code(website, max_retries=3):
             retrieve_retries = 5
             for attempt in range(retrieve_retries):
                 try:
-                    response = requests.post(retrieve_url, json=retrieve_payload, headers=headers, timeout=30)
+                    response = scraper.post(retrieve_url, json=retrieve_payload, headers=headers, timeout=30)
                     retrieve_data = response.json()
                     
                     if retrieve_data.get("code") == 0:
@@ -701,11 +756,11 @@ def generate_qr_code(website, max_retries=3):
                         if qrcode_array and len(qrcode_array) > 0:
                             break
                         elif attempt < retrieve_retries - 1:
-                            time.sleep(1)
-                except requests.exceptions.Timeout:
+                            time.sleep(random.uniform(1, 2))
+                except (requests.exceptions.Timeout, Exception) as e:
                     if attempt < retrieve_retries - 1:
-                        logger.warning(f"[GENERATE_QR] Retrieve timeout, retrying... ({attempt + 1}/{retrieve_retries})")
-                        time.sleep(2)
+                        logger.warning(f"[GENERATE_QR] Retrieve error: {e}, retrying... ({attempt + 1}/{retrieve_retries})")
+                        time.sleep(random.uniform(2, 4))
                         continue
                     else:
                         if retry < max_retries - 1:
@@ -773,16 +828,19 @@ def generate_qr_code(website, max_retries=3):
 
 
 def check_login_status(website):
-    """Check login status for a website"""
+    """Check login status for a website using cloudscraper"""
     try:
         base_url = website['base_url']
         code = website['code']
         headers = get_headers_for_website(website)
         
+        # Use cloudscraper for anti-bot bypass
+        scraper = create_scraper_session()
+        
         status_url = f"{base_url}/login/status"
         status_payload = {"code": code}
         
-        response = requests.post(status_url, json=status_payload, headers=headers, timeout=30)
+        response = scraper.post(status_url, json=status_payload, headers=headers, timeout=30)
         
         if response.status_code == 200:
             status_data = response.json()
