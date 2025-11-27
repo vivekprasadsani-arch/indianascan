@@ -696,7 +696,12 @@ except:
 
 # Create cloudscraper session (bypasses Cloudflare and anti-bot)
 def create_scraper_session():
-    """Create a new cloudscraper session with SOCKS5 proxy and random browser profile"""
+    """Create a new cloudscraper session with random browser profile.
+    
+    NOTE: Proxy DISABLED to allow true session isolation!
+    Each user's requests go from server's IP with their own cookies.
+    The API tracks sessions by cookies, not IP - so multiple users can work simultaneously.
+    """
     scraper = cloudscraper.create_scraper(
         browser={
             'browser': random.choice(['chrome', 'firefox']),
@@ -706,13 +711,14 @@ def create_scraper_session():
         delay=random.uniform(1, 3)
     )
     
-    # Set SOCKS5 proxy
-    scraper.proxies = {
-        'http': PROXY_URL,
-        'https': PROXY_URL
-    }
+    # PROXY DISABLED - Using direct connection for session isolation
+    # When all users go through same proxy, API might track by IP = session conflicts!
+    # scraper.proxies = {
+    #     'http': PROXY_URL,
+    #     'https': PROXY_URL
+    # }
     
-    logger.info(f"[PROXY] Using SOCKS5 proxy: {PROXY_HOST}:{PROXY_PORT}")
+    logger.info(f"[SESSION] Created new scraper - direct connection (no proxy)")
     return scraper
 
 def get_random_user_agent():
