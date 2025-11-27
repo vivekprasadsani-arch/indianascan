@@ -22,6 +22,15 @@ from supabase import create_client, Client
 import cloudscraper
 from fake_useragent import UserAgent
 
+# curl_cffi - Real browser TLS fingerprint impersonation!
+# This is the KEY to session isolation - each session gets a unique browser fingerprint
+try:
+    from curl_cffi.requests import Session as CurlSession
+    CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CURL_CFFI_AVAILABLE = False
+    CurlSession = None
+
 # ==================== HEALTH CHECK SERVER (for Render) ====================
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -694,32 +703,55 @@ try:
 except:
     ua = None
 
-# Create cloudscraper session (bypasses Cloudflare and anti-bot)
+# Available browser impersonations for curl_cffi
+# Each impersonation has a UNIQUE TLS/JA3 fingerprint - just like real browsers!
+BROWSER_IMPERSONATIONS = [
+    "chrome110", "chrome107", "chrome104", "chrome101", "chrome100",
+    "chrome99", "edge99", "edge101",
+    "safari15_3", "safari15_5",
+    "chrome99_android",
+]
+
 def create_scraper_session():
-    """Create a new cloudscraper session with random browser profile.
+    """Create a new session with UNIQUE browser TLS fingerprint.
     
-    NOTE: Proxy DISABLED to allow true session isolation!
-    Each user's requests go from server's IP with their own cookies.
-    The API tracks sessions by cookies, not IP - so multiple users can work simultaneously.
+    Uses curl_cffi to impersonate real browser TLS fingerprints.
+    This is the KEY difference from Python requests - each session
+    looks like a DIFFERENT real browser to the API!
+    
+    Like opening different browser profiles - each has unique fingerprint.
     """
-    scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': random.choice(['chrome', 'firefox']),
-            'platform': random.choice(['windows', 'linux', 'darwin']),
-            'mobile': False
-        },
-        delay=random.uniform(1, 3)
-    )
     
-    # PROXY DISABLED - Using direct connection for session isolation
-    # When all users go through same proxy, API might track by IP = session conflicts!
-    # scraper.proxies = {
-    #     'http': PROXY_URL,
-    #     'https': PROXY_URL
-    # }
-    
-    logger.info(f"[SESSION] Created new scraper - direct connection (no proxy)")
-    return scraper
+    if CURL_CFFI_AVAILABLE:
+        # Use curl_cffi with random browser impersonation
+        # Each impersonation = unique TLS/JA3 fingerprint!
+        impersonate = random.choice(BROWSER_IMPERSONATIONS)
+        session = CurlSession(impersonate=impersonate)
+        
+        # Set proxy if needed (with unique fingerprint, proxy is OK now!)
+        session.proxies = {
+            'http': PROXY_URL,
+            'https': PROXY_URL
+        }
+        
+        logger.info(f"[SESSION] Created curl_cffi session - impersonating: {impersonate}")
+        return session
+    else:
+        # Fallback to cloudscraper if curl_cffi not available
+        logger.warning("[SESSION] curl_cffi not available, using cloudscraper fallback")
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': random.choice(['chrome', 'firefox']),
+                'platform': random.choice(['windows', 'linux', 'darwin']),
+                'mobile': False
+            },
+            delay=random.uniform(1, 3)
+        )
+        scraper.proxies = {
+            'http': PROXY_URL,
+            'https': PROXY_URL
+        }
+        return scraper
 
 def get_random_user_agent():
     """Get a random user agent"""
@@ -772,7 +804,9 @@ def get_headers_for_website(website):
 
 def get_or_create_user_session(user_id, website_index, website):
     """Get existing session or create new one for user/website combination.
-    This ensures TRUE browser-like session isolation with persistent cookies.
+    
+    CRITICAL: Each user gets a UNIQUE browser fingerprint!
+    This is like different browser profiles - each has its own TLS fingerprint.
     """
     global user_qr_sessions
     
@@ -785,18 +819,37 @@ def get_or_create_user_session(user_id, website_index, website):
         session_data = user_qr_sessions[user_id][website_index]
         created_at = session_data.get("created_at", 0)
         if time.time() - created_at < 300:  # 5 minutes
-            logger.info(f"[SESSION] Reusing existing session for user {user_id}, website {website_index}")
+            impersonate = session_data.get("impersonate", "unknown")
+            logger.info(f"[SESSION] Reusing session for user {user_id}, website {website_index}, fingerprint: {impersonate}")
             return session_data["scraper"], session_data["headers"]
     
-    # Create NEW fresh session - like opening a new browser profile
-    logger.info(f"[SESSION] Creating NEW isolated session for user {user_id}, website {website_index}")
-    scraper = create_scraper_session()
+    # Assign a UNIQUE browser fingerprint to this user
+    # Use user_id to deterministically select fingerprint (consistent per user)
+    if CURL_CFFI_AVAILABLE:
+        # Each user gets a consistent fingerprint based on their ID
+        fingerprint_index = (user_id + website_index) % len(BROWSER_IMPERSONATIONS)
+        impersonate = BROWSER_IMPERSONATIONS[fingerprint_index]
+        
+        session = CurlSession(impersonate=impersonate)
+        session.proxies = {
+            'http': PROXY_URL,
+            'https': PROXY_URL
+        }
+        
+        logger.info(f"[SESSION] NEW session for user {user_id}, website {website_index} - fingerprint: {impersonate}")
+    else:
+        # Fallback
+        session = create_scraper_session()
+        impersonate = "cloudscraper"
+        logger.info(f"[SESSION] NEW session (fallback) for user {user_id}, website {website_index}")
+    
     headers = get_headers_for_website(website)
     
     # Pre-store the session BEFORE any requests
     user_qr_sessions[user_id][website_index] = {
-        "scraper": scraper,
+        "scraper": session,
         "headers": headers,
+        "impersonate": impersonate,  # Track which fingerprint this user has
         "qr_data": None,
         "qr_token": None,
         "qr_unique_id": None,
@@ -804,7 +857,7 @@ def get_or_create_user_session(user_id, website_index, website):
         "created_at": time.time()
     }
     
-    return scraper, headers
+    return session, headers
 
 
 def generate_qr_code(website, user_id, website_index, max_retries=15):

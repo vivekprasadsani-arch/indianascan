@@ -7,4 +7,5 @@ pytz>=2023.3
 cloudscraper>=1.2.71
 fake-useragent>=1.4.0
 PySocks>=1.7.1
+curl_cffi>=0.5.10
 
