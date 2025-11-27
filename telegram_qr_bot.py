@@ -85,7 +85,7 @@ EARNINGS_PER_NUMBER = 10.00
 # Time restrictions (Bangladesh Time)
 WORK_START_HOUR = 10  # 10:30 AM
 WORK_START_MINUTE = 30
-WORK_END_HOUR = 7  # 7:00 AM next day
+WORK_END_HOUR = 15  # 3:00 PM same day
 WORK_END_MINUTE = 0
 DAILY_RESET_HOUR = 8  # 8:00 AM
 DAILY_RESET_MINUTE = 0
@@ -327,27 +327,26 @@ def get_bd_date():
     return get_bd_time().date()
 
 def is_within_working_hours():
-    """Check if current time is within working hours (10:30 AM - 7:00 AM next day)"""
+    """Check if current time is within working hours (10:30 AM - 3:00 PM)"""
     now = get_bd_time()
     current_time = now.time()
     
-    # Working hours: 10:30 AM to 7:00 AM next day
-    # This means NOT working: 7:00 AM to 10:30 AM
-    start_break = dt_time(7, 0)  # 7:00 AM
-    end_break = dt_time(10, 30)  # 10:30 AM
+    # Working hours: 10:30 AM to 3:00 PM same day
+    start_time = dt_time(10, 30)  # 10:30 AM
+    end_time = dt_time(15, 0)  # 3:00 PM
     
-    # If current time is between 7:00 AM and 10:30 AM, not working
-    if start_break <= current_time < end_break:
-        return False
+    # If current time is between 10:30 AM and 3:00 PM, working
+    if start_time <= current_time < end_time:
+        return True
     
-    return True
+    return False
 
 def get_working_hours_message():
     """Get message about working hours"""
     return (
         "⏰ Working hours ended!\n\n"
         "📅 Working Schedule:\n"
-        "• 10:30 AM to 7:00 AM (next day)\n\n"
+        "• 10:30 AM to 3:00 PM\n\n"
         "⏳ Please try again after 10:30 AM."
     )
 
@@ -1400,7 +1399,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📱 Send your phone number to start generating QR codes.\n\n"
             "🌐 Login to all 4 websites = 1 number completed\n"
             "💰 Earn 10 Taka per completed number\n\n"
-            "⏰ Working Hours: 10:30 AM - 7:00 AM (next day)\n"
+            "⏰ Working Hours: 10:30 AM - 3:00 PM\n"
             "🔄 Daily reset at 8:00 AM"
             f"{stats_msg}"
         )
@@ -1436,7 +1435,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     "🎉 Congratulations!\n\n"
                     "✅ Your account has been approved!\n\n"
                     "📱 Send your phone number to start generating QR codes.\n\n"
-                    "⏰ Working Hours: 10:30 AM - 7:00 AM (next day)"
+                    "⏰ Working Hours: 10:30 AM - 3:00 PM"
                 ),
                 reply_markup=get_user_keyboard()
             )
@@ -1495,7 +1494,7 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             "💰 Earnings:\n"
             "• 10 Taka per completed number\n\n"
             "⏰ Working Hours:\n"
-            "• 10:30 AM to 7:00 AM (next day)\n"
+            "• 10:30 AM to 3:00 PM\n"
             "• Daily reset at 8:00 AM\n\n"
             "📊 Commands:\n"
             "• /start - Restart bot\n"
@@ -1517,7 +1516,7 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"📆 Date: {now.strftime('%Y-%m-%d')}\n\n"
             f"🕐 Working Schedule:\n"
             f"• Start: 10:30 AM\n"
-            f"• End: 7:00 AM (next day)\n\n"
+            f"• End: 3:00 PM\n\n"
             f"🔄 Daily Reset: 8:00 AM\n"
             f"📊 Admin Report: 3:00 PM"
         )
@@ -2563,7 +2562,7 @@ async def daily_reset_job(context: ContextTypes.DEFAULT_TYPE):
                     text=(
                         "🔄 Daily Reset Complete!\n\n"
                         "📅 A new day has started.\n"
-                        "⏰ Working Hours: 10:30 AM - 7:00 AM (next day)\n\n"
+                        "⏰ Working Hours: 10:30 AM - 3:00 PM\n\n"
                         "📱 Send a phone number to start adding."
                     ),
                     reply_markup=get_keyboard_for_user(user_id)
