@@ -6,6 +6,9 @@ import re
 import asyncio
 import signal
 import sys
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, time as dt_time
 from qrcode import QRCode
 from PIL import Image
@@ -15,6 +18,25 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 import logging
 import pytz
 from supabase import create_client, Client
+
+# ==================== HEALTH CHECK SERVER (for Render) ====================
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'OK - Bot is running')
+    
+    def log_message(self, format, *args):
+        pass  # Suppress HTTP logs
+
+def start_health_server():
+    """Start health check HTTP server for Render"""
+    port = int(os.environ.get('PORT', 10000))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    logger.info(f"Health check server started on port {port}")
+    server.serve_forever()
 
 # Configure logging
 logging.basicConfig(
@@ -126,10 +148,18 @@ WEBSITES = [
 # Headers for API requests
 HEADERS = {
     "content-type": "application/json",
-    "user-agent": "Mozilla/5.0 (Linux; Android 4.4.2; Nexus 4 Build/KOT49H) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/34.0.1847.114 Mobile Safari/537.36",
-    "sec-ch-ua": '"Chromium";v="142", "Android WebView";v="142", "Not_A Brand";v="99"',
-    "sec-ch-ua-platform": '"Android"',
-    "authorization": "Bearer null"
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "en-US,en;q=0.9",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "authorization": "Bearer null",
+    "origin": "https://earnbro.net",
+    "referer": "https://earnbro.net/"
 }
 
 # User session data (in-memory cache)
@@ -600,10 +630,33 @@ async def get_all_approved_users():
 
 # ==================== QR CODE FUNCTIONS ====================
 
+def get_headers_for_website(website):
+    """Get headers customized for each website"""
+    # Extract domain from base_url
+    domain = website['base_url'].split('/')[2]  # e.g., earnbro.net
+    
+    return {
+        "content-type": "application/json",
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "en-US,en;q=0.9",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "authorization": "Bearer null",
+        "origin": f"https://{domain}",
+        "referer": f"https://{domain}/"
+    }
+
+
 def generate_qr_code(website, max_retries=3):
     """Generate QR code for a website with retry mechanism"""
     base_url = website['base_url']
     code = website['code']
+    headers = get_headers_for_website(website)
     
     for retry in range(max_retries):
         try:
@@ -612,7 +665,7 @@ def generate_qr_code(website, max_retries=3):
             generate_payload = {"code": code}
             
             logger.info(f"[GENERATE_QR] Attempt {retry + 1}/{max_retries} for {website['name']}")
-            response = requests.post(generate_url, json=generate_payload, headers=HEADERS, timeout=30)
+            response = requests.post(generate_url, json=generate_payload, headers=headers, timeout=30)
             
             if response.status_code != 200:
                 if retry < max_retries - 1:
@@ -640,7 +693,7 @@ def generate_qr_code(website, max_retries=3):
             retrieve_retries = 5
             for attempt in range(retrieve_retries):
                 try:
-                    response = requests.post(retrieve_url, json=retrieve_payload, headers=HEADERS, timeout=30)
+                    response = requests.post(retrieve_url, json=retrieve_payload, headers=headers, timeout=30)
                     retrieve_data = response.json()
                     
                     if retrieve_data.get("code") == 0:
@@ -724,11 +777,12 @@ def check_login_status(website):
     try:
         base_url = website['base_url']
         code = website['code']
+        headers = get_headers_for_website(website)
         
         status_url = f"{base_url}/login/status"
         status_payload = {"code": code}
         
-        response = requests.post(status_url, json=status_payload, headers=HEADERS, timeout=30)
+        response = requests.post(status_url, json=status_payload, headers=headers, timeout=30)
         
         if response.status_code == 200:
             status_data = response.json()
@@ -1945,6 +1999,10 @@ def signal_handler(signum, frame):
 def main():
     """Start the bot"""
     global bot_application
+    
+    # Start health check server for Render (in background thread)
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
     
     if sys.platform != "win32":
         signal.signal(signal.SIGTERM, signal_handler)
