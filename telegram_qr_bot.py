@@ -1784,6 +1784,21 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Handle Help button (available to all)
     if text == BTN_HELP:
+        # Get working hours from database
+        hours = await get_working_hours_from_db()
+        start_h = hours['start_hour']
+        start_m = hours['start_minute']
+        end_h = hours['end_hour']
+        end_m = hours['end_minute']
+        
+        # Format time nicely
+        start_ampm = "AM" if start_h < 12 else "PM"
+        end_ampm = "AM" if end_h < 12 else "PM"
+        start_h_12 = start_h if start_h <= 12 else start_h - 12
+        end_h_12 = end_h if end_h <= 12 else end_h - 12
+        if start_h_12 == 0: start_h_12 = 12
+        if end_h_12 == 0: end_h_12 = 12
+        
         help_msg = (
             "❓ Help & Instructions\n\n"
             "📱 How to use:\n"
@@ -1795,7 +1810,7 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             "💰 Earnings:\n"
             "• 10 Taka per completed number\n\n"
             "⏰ Working Hours:\n"
-            "• 10:30 AM to 11:00 PM\n"
+            f"• {start_h_12}:{start_m:02d} {start_ampm} to {end_h_12}:{end_m:02d} {end_ampm}\n"
             "• Daily reset at 8:00 AM\n\n"
             "📊 Commands:\n"
             "• /start - Restart bot\n"
@@ -1808,18 +1823,33 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Handle Working Hours button
     if text == BTN_WORKING_HOURS:
         now = get_bd_time()
-        is_working = is_within_working_hours()
+        is_working = await is_within_working_hours_async()
         status = "🟢 OPEN" if is_working else "🔴 CLOSED"
+        
+        # Get working hours from database
+        hours = await get_working_hours_from_db()
+        start_h = hours['start_hour']
+        start_m = hours['start_minute']
+        end_h = hours['end_hour']
+        end_m = hours['end_minute']
+        
+        # Format time nicely
+        start_ampm = "AM" if start_h < 12 else "PM"
+        end_ampm = "AM" if end_h < 12 else "PM"
+        start_h_12 = start_h if start_h <= 12 else start_h - 12
+        end_h_12 = end_h if end_h <= 12 else end_h - 12
+        if start_h_12 == 0: start_h_12 = 12
+        if end_h_12 == 0: end_h_12 = 12
         
         hours_msg = (
             f"⏰ Working Hours Status: {status}\n\n"
             f"📅 Current Time: {now.strftime('%I:%M %p')}\n"
             f"📆 Date: {now.strftime('%Y-%m-%d')}\n\n"
             f"🕐 Working Schedule:\n"
-            f"• Start: 10:30 AM\n"
-            f"• End: 11:00 PM\n\n"
+            f"• Start: {start_h_12}:{start_m:02d} {start_ampm}\n"
+            f"• End: {end_h_12}:{end_m:02d} {end_ampm}\n\n"
             f"🔄 Daily Reset: 8:00 AM\n"
-            f"📊 Admin Report: 11:00 PM"
+            f"📊 Admin Report: {end_h_12}:{end_m:02d} {end_ampm}"
         )
         keyboard = get_keyboard_for_user(user_id)
         await update.message.reply_text(hours_msg, reply_markup=keyboard)
@@ -2210,9 +2240,10 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     # Check working hours
-    if not is_within_working_hours():
+    if not await is_within_working_hours_async():
+        hours_msg = await get_working_hours_message_async()
         await update.message.reply_text(
-            get_working_hours_message(),
+            hours_msg,
             reply_markup=get_keyboard_for_user(user_id)
         )
         return
@@ -3045,8 +3076,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Check working hours
-    if not is_within_working_hours():
-        await query.answer("⏰ Working hours ended! Come back after 10:30 AM.", show_alert=True)
+    if not await is_within_working_hours_async():
+        hours = await get_working_hours_from_db()
+        start_h = hours['start_hour']
+        start_m = hours['start_minute']
+        start_ampm = "AM" if start_h < 12 else "PM"
+        start_h_12 = start_h if start_h <= 12 else start_h - 12
+        if start_h_12 == 0: start_h_12 = 12
+        await query.answer(f"⏰ Working hours ended! Come back after {start_h_12}:{start_m:02d} {start_ampm}.", show_alert=True)
         return
     
     # Handle regenerate QR code
@@ -3275,6 +3312,14 @@ async def admin_report_job(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error sending admin report: {e}")
 
 
+async def initialize_working_hours_cache():
+    """Initialize working hours cache at startup"""
+    try:
+        hours = await get_working_hours_from_db()
+        logger.info(f"✅ Working hours cache initialized: {hours['start_hour']}:{hours['start_minute']:02d} - {hours['end_hour']}:{hours['end_minute']:02d}")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize working hours cache: {e}")
+
 def setup_scheduled_jobs(application: Application):
     """Setup scheduled jobs"""
     job_queue = application.job_queue
@@ -3354,7 +3399,7 @@ def main():
         signal.signal(signal.SIGINT, signal_handler)
     
     # Create application
-    bot_application = Application.builder().token(BOT_TOKEN).build()
+    bot_application = Application.builder().token(BOT_TOKEN).post_init(initialize_working_hours_cache).build()
     
     # Add handlers
     bot_application.add_handler(CommandHandler("start", start))
@@ -3381,9 +3426,13 @@ def main():
         
         # Setup webhook
         if setup_webhook():
+            # Initialize working hours cache
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(initialize_working_hours_cache())
+            
             # Initialize the application
-            asyncio.get_event_loop().run_until_complete(bot_application.initialize())
-            asyncio.get_event_loop().run_until_complete(bot_application.start())
+            loop.run_until_complete(bot_application.initialize())
+            loop.run_until_complete(bot_application.start())
             
             # Start Flask server
             port = int(os.environ.get('PORT', 10000))
