@@ -56,7 +56,7 @@ EARNINGS_PER_NUMBER = 10.00
 # Time restrictions (Bangladesh Time)
 WORK_START_HOUR = 10  # 10:30 AM
 WORK_START_MINUTE = 30
-WORK_END_HOUR = 15  # 3:00 PM same day
+WORK_END_HOUR = 23  # 11:00 PM same day
 WORK_END_MINUTE = 0
 
 # Website configurations
