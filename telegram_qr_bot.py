@@ -1451,10 +1451,14 @@ async def check_and_notify_pc_users(context: ContextTypes.DEFAULT_TYPE):
                 continue
             
             # Send notification to admin
+            first_name = user.get('first_name', '')
+            last_name = user.get('last_name', '')
+            name = f"{first_name} {last_name}".strip() if (first_name or last_name) else "PC User"
+            
             admin_msg = (
                 "💻 New PC User Registration!\n\n"
                 f"📱 Mobile Number: {mobile_number}\n"
-                f"👤 Name: {user.get('first_name', 'N/A')} {user.get('last_name', '')}\n"
+                f"👤 Name: {name}\n"
                 f"📅 Registered: {user.get('created_at', 'N/A')[:10] if user.get('created_at') else 'N/A'}\n\n"
                 "What would you like to do?"
             )
@@ -1766,8 +1770,14 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
                             InlineKeyboardButton("❌ Reject", callback_data=f"reject_{identifier}")
                         ]
                     ]
+                    # Format display message
+                    if user_type == 'pc':
+                        display_msg = f"👤 {username}\n📱 Mobile: {mobile}"
+                    else:
+                        display_msg = f"👤 {username}\n🆔 Telegram ID: {identifier}"
+                    
                     await update.message.reply_text(
-                        f"👤 {username}\n{'📱 Mobile' if user_type == 'pc' else '🆔 Telegram ID'}: {identifier.replace('pc_', '') if user_type == 'pc' else identifier}",
+                        display_msg,
                         reply_markup=InlineKeyboardMarkup(keyboard)
                     )
             
@@ -2614,7 +2624,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
     
-    # Handle admin callbacks
+    # Handle admin callbacks (both approve_ and reject_)
     if data.startswith("approve_") or data.startswith("reject_"):
         await handle_admin_callback(update, context)
         return
