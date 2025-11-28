@@ -717,7 +717,7 @@ async def update_session(telegram_user_id: int, **kwargs):
         return None
 
 async def get_daily_report_data():
-    """Get daily report data for admin"""
+    """Get daily report data for admin (includes both Telegram and PC users)"""
     try:
         today = get_bd_date()
         
@@ -726,16 +726,28 @@ async def get_daily_report_data():
         
         report_data = []
         for user in users.data:
-            telegram_user_id = user['telegram_user_id']
+            user_id = user['id']
+            telegram_user_id = user.get('telegram_user_id')
+            mobile_number = user.get('mobile_number')
+            user_type = user.get('user_type', 'telegram')
             
-            # Get numbers added today
-            numbers_added = supabase.table('phone_numbers').select('id', count='exact').eq('telegram_user_id', telegram_user_id).eq('reset_date', today.isoformat()).execute()
+            # For Telegram users, query by telegram_user_id
+            # For PC users, query by user_id
+            if user_type == 'pc' or (not telegram_user_id and mobile_number):
+                # PC user - query by user_id
+                numbers_added = supabase.table('phone_numbers').select('id', count='exact').eq('user_id', user_id).eq('reset_date', today.isoformat()).execute()
+                numbers_completed = supabase.table('completed_numbers').select('id', count='exact').eq('user_id', user_id).eq('reset_date', today.isoformat()).execute()
+                earnings_result = supabase.table('completed_numbers').select('earnings').eq('user_id', user_id).eq('reset_date', today.isoformat()).execute()
+                display_name = f"🖥️ {mobile_number}" if mobile_number else f"PC User {user_id}"
+            else:
+                # Telegram user - query by telegram_user_id
+                if not telegram_user_id:
+                    continue
+                numbers_added = supabase.table('phone_numbers').select('id', count='exact').eq('telegram_user_id', telegram_user_id).eq('reset_date', today.isoformat()).execute()
+                numbers_completed = supabase.table('completed_numbers').select('id', count='exact').eq('telegram_user_id', telegram_user_id).eq('reset_date', today.isoformat()).execute()
+                earnings_result = supabase.table('completed_numbers').select('earnings').eq('telegram_user_id', telegram_user_id).eq('reset_date', today.isoformat()).execute()
+                display_name = user.get('username') or user.get('first_name') or f"User {telegram_user_id}"
             
-            # Get numbers completed today
-            numbers_completed = supabase.table('completed_numbers').select('id', count='exact').eq('telegram_user_id', telegram_user_id).eq('reset_date', today.isoformat()).execute()
-            
-            # Get today's earnings
-            earnings_result = supabase.table('completed_numbers').select('earnings').eq('telegram_user_id', telegram_user_id).eq('reset_date', today.isoformat()).execute()
             today_earnings = sum(float(e.get('earnings', 0)) for e in earnings_result.data) if earnings_result.data else 0
             
             added_count = numbers_added.count if numbers_added else 0
@@ -744,7 +756,9 @@ async def get_daily_report_data():
             if added_count > 0 or completed_count > 0:
                 report_data.append({
                     'telegram_user_id': telegram_user_id,
-                    'username': user.get('username'),
+                    'mobile_number': mobile_number,
+                    'user_type': user_type,
+                    'username': display_name,
                     'first_name': user.get('first_name'),
                     'numbers_added': added_count,
                     'numbers_completed': completed_count,
@@ -754,6 +768,8 @@ async def get_daily_report_data():
         return report_data
     except Exception as e:
         logger.error(f"Error in get_daily_report_data: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 async def reset_daily_data():
