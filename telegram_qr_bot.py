@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 # ==================== CONFIGURATION ====================
 
 # Telegram Bot Token
-BOT_TOKEN = "7825871733:AAFv0HVbH_MkoeFpstfb-0UtXqAzeCBuOho"
+BOT_TOKEN = "7825871733:AAEIJBMkQgSXMlriio2mKQq7iuO-8PqtUzk"
 
 # Admin Telegram User ID
 ADMIN_USER_ID = 7325836764
