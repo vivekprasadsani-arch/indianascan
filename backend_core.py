@@ -227,28 +227,121 @@ def get_bd_date():
     """Get current Bangladesh date"""
     return get_bd_time().date()
 
+# Cache for working hours (to avoid too many DB calls)
+_working_hours_cache = None
+_working_hours_cache_time = None
+
+async def get_bot_settings():
+    """Get all bot settings from database"""
+    try:
+        result = supabase.table('bot_settings').select('*').execute()
+        
+        if result.data:
+            settings = {}
+            for row in result.data:
+                settings[row['setting_key']] = row['setting_value']
+            return settings
+        return None
+    except Exception as e:
+        logger.error(f"Error getting bot settings: {e}")
+        return None
+
+async def get_working_hours_from_db():
+    """Get working hours from database"""
+    global _working_hours_cache, _working_hours_cache_time
+    
+    try:
+        settings = await get_bot_settings()
+        if settings:
+            hours = {
+                'start_hour': int(settings.get('work_start_hour', WORK_START_HOUR)),
+                'start_minute': int(settings.get('work_start_minute', WORK_START_MINUTE)),
+                'end_hour': int(settings.get('work_end_hour', WORK_END_HOUR)),
+                'end_minute': int(settings.get('work_end_minute', WORK_END_MINUTE))
+            }
+            # Update cache
+            _working_hours_cache = hours
+            _working_hours_cache_time = get_bd_time()
+            return hours
+        return {
+            'start_hour': WORK_START_HOUR,
+            'start_minute': WORK_START_MINUTE,
+            'end_hour': WORK_END_HOUR,
+            'end_minute': WORK_END_MINUTE
+        }
+    except Exception as e:
+        logger.error(f"Error getting working hours: {e}")
+        return {
+            'start_hour': WORK_START_HOUR,
+            'start_minute': WORK_START_MINUTE,
+            'end_hour': WORK_END_HOUR,
+            'end_minute': WORK_END_MINUTE
+        }
+
 def is_within_working_hours():
-    """Check if current time is within working hours (10:30 AM - 11:00 PM)"""
+    """Check if current time is within working hours (uses cached DB values)"""
+    global _working_hours_cache, _working_hours_cache_time
+    
     now = get_bd_time()
     current_time = now.time()
     
-    # Working hours: 10:30 AM to 11:00 PM same day
-    start_time = dt_time(WORK_START_HOUR, WORK_START_MINUTE)  # 10:30 AM
-    end_time = dt_time(WORK_END_HOUR, WORK_END_MINUTE)  # 11:00 PM
+    # Use cached values if available and less than 5 minutes old
+    if _working_hours_cache and _working_hours_cache_time:
+        cache_age = (now - _working_hours_cache_time).total_seconds()
+        if cache_age < 300:  # 5 minutes
+            start_time = dt_time(_working_hours_cache['start_hour'], _working_hours_cache['start_minute'])
+            end_time = dt_time(_working_hours_cache['end_hour'], _working_hours_cache['end_minute'])
+            return start_time <= current_time <= end_time
     
-    # If current time is between start and end, working
-    if start_time <= current_time <= end_time:
-        return True
+    # Use default values (DB will be checked async)
+    start_time = dt_time(WORK_START_HOUR, WORK_START_MINUTE)
+    end_time = dt_time(WORK_END_HOUR, WORK_END_MINUTE)
     
-    return False
+    return start_time <= current_time <= end_time
+
+async def is_within_working_hours_async():
+    """Check if current time is within working hours (async, reads from DB)"""
+    hours = await get_working_hours_from_db()
+    
+    now = get_bd_time()
+    current_time = now.time()
+    
+    start_time = dt_time(hours['start_hour'], hours['start_minute'])
+    end_time = dt_time(hours['end_hour'], hours['end_minute'])
+    
+    return start_time <= current_time <= end_time
 
 def get_working_hours_message():
-    """Get message about working hours"""
+    """Get message about working hours (sync version, uses defaults)"""
     return (
         "⏰ Working hours ended!\n\n"
         "📅 Working Schedule:\n"
         f"• {WORK_START_HOUR}:{WORK_START_MINUTE:02d} AM to {WORK_END_HOUR}:00 PM\n\n"
         f"⏳ Please try again after {WORK_START_HOUR}:{WORK_START_MINUTE:02d} AM."
+    )
+
+async def get_working_hours_message_async():
+    """Get message about working hours (async, reads from DB)"""
+    hours = await get_working_hours_from_db()
+    
+    start_h = hours['start_hour']
+    start_m = hours['start_minute']
+    end_h = hours['end_hour']
+    end_m = hours['end_minute']
+    
+    # Format time nicely
+    start_ampm = "AM" if start_h < 12 else "PM"
+    end_ampm = "AM" if end_h < 12 else "PM"
+    start_h_12 = start_h if start_h <= 12 else start_h - 12
+    end_h_12 = end_h if end_h <= 12 else end_h - 12
+    if start_h_12 == 0: start_h_12 = 12
+    if end_h_12 == 0: end_h_12 = 12
+    
+    return (
+        "⏰ Working hours ended!\n\n"
+        "📅 Working Schedule:\n"
+        f"• {start_h_12}:{start_m:02d} {start_ampm} to {end_h_12}:{end_m:02d} {end_ampm}\n\n"
+        f"⏳ Please try again after {start_h_12}:{start_m:02d} {start_ampm}."
     )
 
 def normalize_phone_number(phone):

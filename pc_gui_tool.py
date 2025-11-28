@@ -13,16 +13,21 @@ from datetime import datetime
 import io
 import sys
 import base64
+import logging
 
 # Import shared backend
 from backend_core import (
     WEBSITES, is_within_working_hours, get_working_hours_message,
+    is_within_working_hours_async, get_working_hours_message_async,
     normalize_phone_number, format_phone_number, get_site_name,
     generate_qr_code, check_login_status,
     get_or_create_user_pc,
     add_phone_number_pc, add_website_completion, mark_number_completed_pc,
     get_user_stats_pc, EARNINGS_PER_NUMBER
 )
+
+# Logger
+logger = logging.getLogger(__name__)
 
 # WhatsApp logo as base64 (green circle with phone icon)
 WHATSAPP_ICON_BASE64 = """
@@ -235,8 +240,25 @@ class PCQRTool:
         # Create UI
         self.create_ui()
         
+        # Load working hours from database (cache for faster access)
+        self.load_working_hours()
+        
         # Check if user is logged in
         self.check_login_state()
+    
+    def load_working_hours(self):
+        """Load working hours from database in background"""
+        def load():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(is_within_working_hours_async())
+            except Exception as e:
+                logger.error(f"Error loading working hours: {e}")
+            finally:
+                loop.close()
+        
+        threading.Thread(target=load, daemon=True).start()
     
     def set_window_icon(self):
         """Set WhatsApp icon as window icon"""
@@ -660,9 +682,9 @@ class PCQRTool:
     async def handle_phone_submit_async(self, phone_number):
         """Handle phone number submission asynchronously"""
         try:
-            # Check working hours
-            if not is_within_working_hours():
-                return False, get_working_hours_message()
+            # Check working hours (from database)
+            if not await is_within_working_hours_async():
+                return False, await get_working_hours_message_async()
             
             # Normalize phone number
             normalized = normalize_phone_number(phone_number)
