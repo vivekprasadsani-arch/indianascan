@@ -1,2 +1,1 @@
-worker: python telegram_qr_bot.py
-
+web: python telegram_qr_bot.py
