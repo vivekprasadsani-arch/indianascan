@@ -37,6 +37,22 @@ except ImportError:
 
 flask_app = Flask(__name__)
 
+# Global event loop for webhook mode
+webhook_loop = None
+
+def get_or_create_event_loop():
+    """Get existing event loop or create new one"""
+    global webhook_loop
+    try:
+        if webhook_loop is None or webhook_loop.is_closed():
+            webhook_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(webhook_loop)
+        return webhook_loop
+    except RuntimeError:
+        webhook_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(webhook_loop)
+        return webhook_loop
+
 @flask_app.route('/')
 def health_check():
     """Health check endpoint for Render"""
@@ -46,8 +62,17 @@ def health_check():
 def webhook():
     """Handle incoming Telegram updates via webhook"""
     if request.method == 'POST':
-        update = Update.de_json(request.get_json(force=True), bot_application.bot)
-        asyncio.run(bot_application.process_update(update))
+        try:
+            json_data = request.get_json(force=True)
+            update = Update.de_json(json_data, bot_application.bot)
+            
+            # Use persistent event loop
+            loop = get_or_create_event_loop()
+            loop.run_until_complete(bot_application.process_update(update))
+        except Exception as e:
+            logger.error(f"Webhook error: {e}")
+            import traceback
+            traceback.print_exc()
     return Response('OK', status=200)
 
 # Configure logging
