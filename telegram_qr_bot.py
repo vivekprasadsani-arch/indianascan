@@ -9,7 +9,6 @@ import sys
 import os
 import threading
 import random
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, time as dt_time
 from qrcode import QRCode
 from PIL import Image
@@ -22,6 +21,9 @@ from supabase import create_client, Client
 import cloudscraper
 from fake_useragent import UserAgent
 
+# Flask for webhook
+from flask import Flask, request, Response
+
 # curl_cffi - Real browser TLS fingerprint impersonation!
 # This is the KEY to session isolation - each session gets a unique browser fingerprint
 try:
@@ -31,24 +33,22 @@ except ImportError:
     CURL_CFFI_AVAILABLE = False
     CurlSession = None
 
-# ==================== HEALTH CHECK SERVER (for Render) ====================
+# ==================== FLASK APP (for Webhook) ====================
 
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b'OK - Bot is running')
-    
-    def log_message(self, format, *args):
-        pass  # Suppress HTTP logs
+flask_app = Flask(__name__)
 
-def start_health_server():
-    """Start health check HTTP server for Render"""
-    port = int(os.environ.get('PORT', 10000))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    logger.info(f"Health check server started on port {port}")
-    server.serve_forever()
+@flask_app.route('/')
+def health_check():
+    """Health check endpoint for Render"""
+    return Response('OK - Bot is running', status=200)
+
+@flask_app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle incoming Telegram updates via webhook"""
+    if request.method == 'POST':
+        update = Update.de_json(request.get_json(force=True), bot_application.bot)
+        asyncio.run(bot_application.process_update(update))
+    return Response('OK', status=200)
 
 # Configure logging
 logging.basicConfig(
@@ -2979,13 +2979,41 @@ def signal_handler(signum, frame):
             pass
     sys.exit(0)
 
+def setup_webhook():
+    """Setup webhook for Telegram bot"""
+    # Get Render URL from environment or use default
+    render_url = os.environ.get('RENDER_EXTERNAL_URL', '')
+    
+    if render_url:
+        webhook_url = f"{render_url}/webhook"
+        
+        # Delete any existing webhook first
+        delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+        requests.get(delete_url)
+        time.sleep(1)
+        
+        # Set new webhook
+        set_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
+        response = requests.post(set_url, json={
+            'url': webhook_url,
+            'drop_pending_updates': True,
+            'allowed_updates': ['message', 'callback_query']
+        })
+        
+        if response.status_code == 200:
+            logger.info(f"✅ Webhook set successfully: {webhook_url}")
+            return True
+        else:
+            logger.error(f"❌ Failed to set webhook: {response.text}")
+            return False
+    else:
+        logger.warning("⚠️ RENDER_EXTERNAL_URL not set, running in polling mode")
+        return False
+
+
 def main():
     """Start the bot"""
     global bot_application
-    
-    # Start health check server for Render (in background thread)
-    health_thread = threading.Thread(target=start_health_server, daemon=True)
-    health_thread.start()
     
     if sys.platform != "win32":
         signal.signal(signal.SIGTERM, signal_handler)
@@ -3010,6 +3038,34 @@ def main():
     logger.info(f"Daily reset at: {DAILY_RESET_HOUR}:{DAILY_RESET_MINUTE:02d}")
     logger.info(f"Admin report at: {ADMIN_REPORT_HOUR}:{ADMIN_REPORT_MINUTE:02d}")
     
+    # Check if running on Render (webhook mode) or locally (polling mode)
+    render_url = os.environ.get('RENDER_EXTERNAL_URL', '')
+    
+    if render_url:
+        # Webhook mode for Render
+        logger.info("🌐 Running in WEBHOOK mode (Render)")
+        
+        # Setup webhook
+        if setup_webhook():
+            # Initialize the application
+            asyncio.get_event_loop().run_until_complete(bot_application.initialize())
+            asyncio.get_event_loop().run_until_complete(bot_application.start())
+            
+            # Start Flask server
+            port = int(os.environ.get('PORT', 10000))
+            logger.info(f"🚀 Starting Flask server on port {port}")
+            flask_app.run(host='0.0.0.0', port=port, threaded=True)
+        else:
+            logger.error("Failed to setup webhook, falling back to polling")
+            run_polling_mode()
+    else:
+        # Polling mode for local development
+        logger.info("🔄 Running in POLLING mode (Local)")
+        run_polling_mode()
+
+
+def run_polling_mode():
+    """Run bot in polling mode (for local development)"""
     try:
         bot_application.run_polling(
             allowed_updates=Update.ALL_TYPES,
