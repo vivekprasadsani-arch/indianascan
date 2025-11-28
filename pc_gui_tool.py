@@ -943,42 +943,61 @@ class PCQRTool:
         self.update_progress()
     
     def show_completion_dialog(self):
-        """Show completion dialog with re-scan options"""
+        """Show completion dialog with re-scan options (scrollable)"""
         dialog = tk.Toplevel(self.root)
         dialog.title("All Sites Completed!")
-        dialog.geometry("450x400")
+        dialog.geometry("450x450")
         dialog.configure(bg=COLORS['bg_card'])
-        dialog.resizable(False, False)
+        dialog.resizable(True, True)
         dialog.transient(self.root)
         dialog.grab_set()
         
         # Center
         dialog.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() - 450) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 400) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 450) // 2
         dialog.geometry(f"+{x}+{y}")
         
+        # Create scrollable canvas
+        canvas = tk.Canvas(dialog, bg=COLORS['bg_card'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(dialog, orient='vertical', command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=COLORS['bg_card'])
+        
+        scrollable_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((225, 0), window=scrollable_frame, anchor='n')  # Center horizontally
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack canvas and scrollbar
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        
+        # Enable mouse wheel scrolling
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), 'units')
+        canvas.bind_all('<MouseWheel>', on_mousewheel)
+        dialog.bind('<Destroy>', lambda e: canvas.unbind_all('<MouseWheel>'))
+        
         # Header
-        tk.Label(dialog, text="🎉", font=('Segoe UI', 48),
+        tk.Label(scrollable_frame, text="🎉", font=('Segoe UI', 48),
                 bg=COLORS['bg_card'], fg=COLORS['success']).pack(pady=(20, 10))
         
-        tk.Label(dialog, text="All 4 Sites Completed!",
+        tk.Label(scrollable_frame, text="All 4 Sites Completed!",
                 font=('Segoe UI', 16, 'bold'),
                 bg=COLORS['bg_card'], fg=COLORS['text_primary']).pack()
         
         phone_display = format_phone_number(self.last_completed_phone) if self.last_completed_phone else ""
-        tk.Label(dialog, text=f"📱 {phone_display}\n💰 Earnings added to your account!",
+        tk.Label(scrollable_frame, text=f"📱 {phone_display}\n💰 Earnings added to your account!",
                 font=('Segoe UI', 11),
                 bg=COLORS['bg_card'], fg=COLORS['text_secondary'],
                 justify='center').pack(pady=(10, 20))
         
         # Re-scan section
-        tk.Label(dialog, text="🔄 Re-scan if WhatsApp got unlinked:",
+        tk.Label(scrollable_frame, text="🔄 Re-scan if WhatsApp got unlinked:",
                 font=('Segoe UI', 10),
                 bg=COLORS['bg_card'], fg=COLORS['text_muted']).pack(pady=(0, 10))
         
         # Re-scan buttons frame
-        rescan_frame = tk.Frame(dialog, bg=COLORS['bg_card'])
+        rescan_frame = tk.Frame(scrollable_frame, bg=COLORS['bg_card'])
         rescan_frame.pack(fill='x', padx=30, pady=(0, 15))
         
         for i in range(len(WEBSITES)):
@@ -991,7 +1010,7 @@ class PCQRTool:
             btn.pack(pady=3)
         
         # New number button
-        new_btn = ModernButton(dialog, text="📱 Add New Number",
+        new_btn = ModernButton(scrollable_frame, text="📱 Add New Number",
                               command=dialog.destroy,
                               width=200, height=40)
         new_btn.pack(pady=(10, 20))
