@@ -438,14 +438,14 @@ class PCQRTool:
         # QR code display area with border - larger for better QR visibility
         qr_display = tk.Frame(qr_container, bg=COLORS['bg_input'], 
                              highlightthickness=2, highlightbackground=COLORS['border'])
-        qr_display.place(relx=0.5, rely=0.5, anchor='center', width=420, height=420)
+        qr_display.place(relx=0.5, rely=0.5, anchor='center', width=320, height=320)
         
         self.qr_label = tk.Label(qr_display, 
                                 text="🔒\n\nNo QR Code Generated\n\nLogin and enter a phone number\nto start scanning",
                                 font=('Segoe UI', 12),
                                 bg=COLORS['bg_input'], fg=COLORS['text_muted'],
                                 justify='center')
-        self.qr_label.pack(expand=True, fill='both', padx=20, pady=20)
+        self.qr_label.pack(expand=True, fill='both', padx=5, pady=5)
         
         # Current site indicator
         self.site_indicator = tk.Label(qr_frame, text="",
@@ -743,8 +743,8 @@ class PCQRTool:
             qr_image_bytes.seek(0)
             img = Image.open(qr_image_bytes)
             
-            # Resize for display - larger QR code for better visibility
-            max_size = 380
+            # Resize for display - fit within container
+            max_size = 300
             img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             
             # Convert to PhotoImage
@@ -1028,8 +1028,8 @@ class PCQRTool:
             qr_image_bytes.seek(0)
             img = Image.open(qr_image_bytes)
             
-            # Resize for display - larger QR code for better visibility
-            max_size = 380
+            # Resize for display - fit within container
+            max_size = 300
             img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             
             # Convert to PhotoImage
