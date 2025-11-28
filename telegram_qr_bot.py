@@ -129,6 +129,7 @@ BTN_ADMIN_REPORT = "📊 Today's Report"
 BTN_ADMIN_USERS = "👥 All Users"
 BTN_ADMIN_PENDING = "⏳ Pending Users"
 BTN_ADMIN_STATS = "📈 Total Stats"
+BTN_ADMIN_SETTINGS = "⚙️ Settings"
 
 # ==================== KEYBOARDS ====================
 
@@ -145,8 +146,8 @@ def get_admin_keyboard():
     keyboard = [
         [KeyboardButton(BTN_MY_STATS), KeyboardButton(BTN_ADMIN_REPORT)],
         [KeyboardButton(BTN_ADMIN_USERS), KeyboardButton(BTN_ADMIN_PENDING)],
-        [KeyboardButton(BTN_ADMIN_STATS), KeyboardButton(BTN_WORKING_HOURS)],
-        [KeyboardButton(BTN_HELP)]
+        [KeyboardButton(BTN_ADMIN_STATS), KeyboardButton(BTN_ADMIN_SETTINGS)],
+        [KeyboardButton(BTN_WORKING_HOURS), KeyboardButton(BTN_HELP)]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
@@ -357,23 +358,76 @@ def get_bd_date():
     """Get current Bangladesh date"""
     return get_bd_time().date()
 
+# Cache for working hours (to avoid too many DB calls)
+_working_hours_cache = None
+_working_hours_cache_time = None
+
 def is_within_working_hours():
-    """Check if current time is within working hours (10:30 AM - 11:00 PM)"""
+    """Check if current time is within working hours (uses cached DB values)"""
+    global _working_hours_cache, _working_hours_cache_time
+    
     now = get_bd_time()
     current_time = now.time()
     
-    # Working hours: 10:30 AM to 11:00 PM same day
-    start_time = dt_time(WORK_START_HOUR, WORK_START_MINUTE)  # 10:30 AM
-    end_time = dt_time(WORK_END_HOUR, WORK_END_MINUTE)  # 11:00 PM
+    # Use cached values if available and less than 5 minutes old
+    if _working_hours_cache and _working_hours_cache_time:
+        cache_age = (now - _working_hours_cache_time).total_seconds()
+        if cache_age < 300:  # 5 minutes
+            start_time = dt_time(_working_hours_cache['start_hour'], _working_hours_cache['start_minute'])
+            end_time = dt_time(_working_hours_cache['end_hour'], _working_hours_cache['end_minute'])
+            return start_time <= current_time <= end_time
     
-    # If current time is between start and end, working
-    if start_time <= current_time <= end_time:
-        return True
+    # Use default values (DB will be checked async)
+    start_time = dt_time(WORK_START_HOUR, WORK_START_MINUTE)
+    end_time = dt_time(WORK_END_HOUR, WORK_END_MINUTE)
     
-    return False
+    return start_time <= current_time <= end_time
+
+async def is_within_working_hours_async():
+    """Check if current time is within working hours (async, reads from DB)"""
+    global _working_hours_cache, _working_hours_cache_time
+    
+    now = get_bd_time()
+    current_time = now.time()
+    
+    # Get working hours from database
+    hours = await get_working_hours_from_db()
+    
+    # Update cache
+    _working_hours_cache = hours
+    _working_hours_cache_time = now
+    
+    start_time = dt_time(hours['start_hour'], hours['start_minute'])
+    end_time = dt_time(hours['end_hour'], hours['end_minute'])
+    
+    return start_time <= current_time <= end_time
+
+async def get_working_hours_message_async():
+    """Get message about working hours (async, reads from DB)"""
+    hours = await get_working_hours_from_db()
+    
+    start_h = hours['start_hour']
+    start_m = hours['start_minute']
+    end_h = hours['end_hour']
+    end_m = hours['end_minute']
+    
+    # Format time nicely
+    start_ampm = "AM" if start_h < 12 else "PM"
+    end_ampm = "AM" if end_h < 12 else "PM"
+    start_h_12 = start_h if start_h <= 12 else start_h - 12
+    end_h_12 = end_h if end_h <= 12 else end_h - 12
+    if start_h_12 == 0: start_h_12 = 12
+    if end_h_12 == 0: end_h_12 = 12
+    
+    return (
+        "⏰ Working hours ended!\n\n"
+        "📅 Working Schedule:\n"
+        f"• {start_h_12}:{start_m:02d} {start_ampm} to {end_h_12}:{end_m:02d} {end_ampm}\n\n"
+        f"⏳ Please try again after {start_h_12}:{start_m:02d} {start_ampm}."
+    )
 
 def get_working_hours_message():
-    """Get message about working hours"""
+    """Get message about working hours (sync version, uses defaults)"""
     return (
         "⏰ Working hours ended!\n\n"
         "📅 Working Schedule:\n"
@@ -708,6 +762,77 @@ async def get_total_stats():
     except Exception as e:
         logger.error(f"Error in get_total_stats: {e}")
         return None
+
+
+# ==================== SETTINGS FUNCTIONS ====================
+
+async def get_bot_settings():
+    """Get all bot settings from database"""
+    try:
+        result = supabase.table('bot_settings').select('*').execute()
+        
+        if result.data:
+            settings = {}
+            for row in result.data:
+                settings[row['setting_key']] = row['setting_value']
+            return settings
+        return None
+    except Exception as e:
+        logger.error(f"Error getting bot settings: {e}")
+        return None
+
+async def get_setting(key: str, default=None):
+    """Get a single setting value"""
+    try:
+        result = supabase.table('bot_settings').select('setting_value').eq('setting_key', key).execute()
+        
+        if result.data and len(result.data) > 0:
+            return result.data[0]['setting_value']
+        return default
+    except Exception as e:
+        logger.error(f"Error getting setting {key}: {e}")
+        return default
+
+async def update_setting(key: str, value: str, admin_id: int = None):
+    """Update a setting value"""
+    try:
+        result = supabase.table('bot_settings').update({
+            'setting_value': str(value),
+            'updated_at': datetime.now(BD_TIMEZONE).isoformat(),
+            'updated_by': admin_id
+        }).eq('setting_key', key).execute()
+        
+        return result.data is not None
+    except Exception as e:
+        logger.error(f"Error updating setting {key}: {e}")
+        return False
+
+async def get_working_hours_from_db():
+    """Get working hours from database"""
+    try:
+        settings = await get_bot_settings()
+        if settings:
+            return {
+                'start_hour': int(settings.get('work_start_hour', WORK_START_HOUR)),
+                'start_minute': int(settings.get('work_start_minute', WORK_START_MINUTE)),
+                'end_hour': int(settings.get('work_end_hour', WORK_END_HOUR)),
+                'end_minute': int(settings.get('work_end_minute', WORK_END_MINUTE))
+            }
+        return {
+            'start_hour': WORK_START_HOUR,
+            'start_minute': WORK_START_MINUTE,
+            'end_hour': WORK_END_HOUR,
+            'end_minute': WORK_END_MINUTE
+        }
+    except Exception as e:
+        logger.error(f"Error getting working hours: {e}")
+        return {
+            'start_hour': WORK_START_HOUR,
+            'start_minute': WORK_START_MINUTE,
+            'end_hour': WORK_END_HOUR,
+            'end_minute': WORK_END_MINUTE
+        }
+
 
 async def get_or_create_session(user_id: int, telegram_user_id: int):
     """Get or create bot session"""
@@ -1868,8 +1993,186 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             await update.message.reply_text(msg, reply_markup=get_admin_keyboard())
             return True
+        
+        # Settings
+        if text == BTN_ADMIN_SETTINGS:
+            await show_settings_menu(update, context)
+            return True
     
     return False
+
+
+async def show_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show admin settings menu"""
+    hours = await get_working_hours_from_db()
+    
+    # Format current times
+    start_h = hours['start_hour']
+    start_m = hours['start_minute']
+    end_h = hours['end_hour']
+    end_m = hours['end_minute']
+    
+    # 12-hour format
+    start_ampm = "AM" if start_h < 12 else "PM"
+    end_ampm = "AM" if end_h < 12 else "PM"
+    start_h_12 = start_h if start_h <= 12 else start_h - 12
+    end_h_12 = end_h if end_h <= 12 else end_h - 12
+    if start_h_12 == 0: start_h_12 = 12
+    if end_h_12 == 0: end_h_12 = 12
+    
+    msg = (
+        "⚙️ Bot Settings\n\n"
+        f"🕐 Working Hours:\n"
+        f"   Start: {start_h_12}:{start_m:02d} {start_ampm} ({start_h}:{start_m:02d})\n"
+        f"   End: {end_h_12}:{end_m:02d} {end_ampm} ({end_h}:{end_m:02d})\n\n"
+        "📝 Click a button below to change settings:"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🕐 Change Start Time", callback_data="settings_start_time")],
+        [InlineKeyboardButton("🕐 Change End Time", callback_data="settings_end_time")],
+        [InlineKeyboardButton("❌ Close", callback_data="settings_close")]
+    ]
+    
+    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def show_hour_selector(query, setting_type: str):
+    """Show hour selector keyboard"""
+    msg = f"🕐 Select {'Start' if setting_type == 'start' else 'End'} Hour (24-hour format):"
+    
+    # Create hour buttons (0-23)
+    keyboard = []
+    row = []
+    for h in range(24):
+        row.append(InlineKeyboardButton(f"{h:02d}", callback_data=f"set_{setting_type}_hour_{h}"))
+        if len(row) == 6:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="settings_back")])
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def show_minute_selector(query, setting_type: str, hour: int):
+    """Show minute selector keyboard"""
+    msg = f"🕐 Select {'Start' if setting_type == 'start' else 'End'} Minute:\n(Hour: {hour:02d})"
+    
+    # Create minute buttons (0, 15, 30, 45)
+    keyboard = [
+        [
+            InlineKeyboardButton("00", callback_data=f"set_{setting_type}_minute_{hour}_0"),
+            InlineKeyboardButton("15", callback_data=f"set_{setting_type}_minute_{hour}_15"),
+            InlineKeyboardButton("30", callback_data=f"set_{setting_type}_minute_{hour}_30"),
+            InlineKeyboardButton("45", callback_data=f"set_{setting_type}_minute_{hour}_45"),
+        ],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"settings_{setting_type}_time")]
+    ]
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle settings inline keyboard callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    data = query.data
+    
+    # Only admin can change settings
+    if user_id != ADMIN_USER_ID:
+        await query.answer("❌ Only admin can change settings!", show_alert=True)
+        return
+    
+    if data == "settings_start_time":
+        await show_hour_selector(query, "start")
+    
+    elif data == "settings_end_time":
+        await show_hour_selector(query, "end")
+    
+    elif data.startswith("set_start_hour_") or data.startswith("set_end_hour_"):
+        parts = data.split("_")
+        setting_type = parts[1]  # start or end
+        hour = int(parts[3])
+        await show_minute_selector(query, setting_type, hour)
+    
+    elif data.startswith("set_start_minute_") or data.startswith("set_end_minute_"):
+        parts = data.split("_")
+        setting_type = parts[1]  # start or end
+        hour = int(parts[3])
+        minute = int(parts[4])
+        
+        # Update settings in database
+        hour_key = f"work_{setting_type}_hour"
+        minute_key = f"work_{setting_type}_minute"
+        
+        success_hour = await update_setting(hour_key, str(hour), user_id)
+        success_minute = await update_setting(minute_key, str(minute), user_id)
+        
+        # Clear cache
+        global _working_hours_cache
+        _working_hours_cache = None
+        
+        if success_hour and success_minute:
+            # Format time nicely
+            ampm = "AM" if hour < 12 else "PM"
+            h_12 = hour if hour <= 12 else hour - 12
+            if h_12 == 0: h_12 = 12
+            
+            await query.edit_message_text(
+                f"✅ {'Start' if setting_type == 'start' else 'End'} time updated!\n\n"
+                f"🕐 New time: {h_12}:{minute:02d} {ampm} ({hour}:{minute:02d})\n\n"
+                "Use ⚙️ Settings button to see all settings.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⚙️ Back to Settings", callback_data="settings_back")]
+                ])
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Error updating settings. Please try again.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⚙️ Back to Settings", callback_data="settings_back")]
+                ])
+            )
+    
+    elif data == "settings_back":
+        # Show settings menu again
+        hours = await get_working_hours_from_db()
+        
+        start_h = hours['start_hour']
+        start_m = hours['start_minute']
+        end_h = hours['end_hour']
+        end_m = hours['end_minute']
+        
+        start_ampm = "AM" if start_h < 12 else "PM"
+        end_ampm = "AM" if end_h < 12 else "PM"
+        start_h_12 = start_h if start_h <= 12 else start_h - 12
+        end_h_12 = end_h if end_h <= 12 else end_h - 12
+        if start_h_12 == 0: start_h_12 = 12
+        if end_h_12 == 0: end_h_12 = 12
+        
+        msg = (
+            "⚙️ Bot Settings\n\n"
+            f"🕐 Working Hours:\n"
+            f"   Start: {start_h_12}:{start_m:02d} {start_ampm} ({start_h}:{start_m:02d})\n"
+            f"   End: {end_h_12}:{end_m:02d} {end_ampm} ({end_h}:{end_m:02d})\n\n"
+            "📝 Click a button below to change settings:"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🕐 Change Start Time", callback_data="settings_start_time")],
+            [InlineKeyboardButton("🕐 Change End Time", callback_data="settings_end_time")],
+            [InlineKeyboardButton("❌ Close", callback_data="settings_close")]
+        ]
+        
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif data == "settings_close":
+        await query.edit_message_text("⚙️ Settings closed.\n\nUse ⚙️ Settings button to open again.")
 
 
 async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2719,15 +3022,21 @@ def create_rescan_keyboard():
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline keyboard callbacks"""
     query = update.callback_query
-    await query.answer()
-    
     user_id = query.from_user.id
     data = query.data
     
     # Handle admin callbacks (both approve_ and reject_)
     if data.startswith("approve_") or data.startswith("reject_"):
+        await query.answer()
         await handle_admin_callback(update, context)
         return
+    
+    # Handle settings callbacks (admin only)
+    if data.startswith("settings_") or data.startswith("set_"):
+        await handle_settings_callback(update, context)
+        return
+    
+    await query.answer()
     
     # Check if user is approved
     db_user = await get_user_by_telegram_id(user_id)
