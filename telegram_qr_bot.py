@@ -626,12 +626,21 @@ async def get_all_users_list():
         return []
 
 async def get_pending_users_list():
-    """Get list of pending users"""
+    """Get list of pending users (both Telegram and PC)"""
     try:
         result = supabase.table('users').select('*').eq('status', 'pending').order('created_at', desc=True).execute()
         return result.data if result.data else []
     except Exception as e:
         logger.error(f"Error in get_pending_users_list: {e}")
+        return []
+
+async def get_pending_pc_users_list():
+    """Get list of pending PC users"""
+    try:
+        result = supabase.table('users').select('*').eq('status', 'pending').eq('user_type', 'pc').order('created_at', desc=True).execute()
+        return result.data if result.data else []
+    except Exception as e:
+        logger.error(f"Error in get_pending_pc_users_list: {e}")
         return []
 
 async def get_total_stats():
@@ -1294,6 +1303,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if db_user and db_user.get('status') != 'approved':
             await update_user_status(user_id, 'approved', user_id)
         
+        # Check for pending PC user notifications
+        await check_and_notify_pc_users(context)
+        
         # Get stats
         stats = await get_total_stats()
         stats_msg = ""
@@ -1407,8 +1419,72 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(welcome_msg, reply_markup=get_user_keyboard())
 
 
+async def check_and_notify_pc_users(context: ContextTypes.DEFAULT_TYPE):
+    """Check for new PC user registrations and notify admin"""
+    try:
+        # Get unprocessed PC user notifications
+        result = supabase.table('admin_notifications').select('*').eq('notification_type', 'new_pc_user').eq('is_processed', False).order('created_at', desc=True).execute()
+        
+        if not result.data or len(result.data) == 0:
+            return
+        
+        # Get pending PC users
+        from backend_core import get_pending_pc_users_list
+        pending_pc_users = await get_pending_pc_users_list()
+        
+        # Send notification for each new PC user
+        for notification in result.data:
+            mobile_number = notification.get('mobile_number')
+            if not mobile_number:
+                continue
+            
+            # Find the user
+            user = None
+            for u in pending_pc_users:
+                if u.get('mobile_number') == mobile_number:
+                    user = u
+                    break
+            
+            if not user:
+                # Mark as processed even if user not found
+                supabase.table('admin_notifications').update({'is_processed': True}).eq('id', notification['id']).execute()
+                continue
+            
+            # Send notification to admin
+            admin_msg = (
+                "💻 New PC User Registration!\n\n"
+                f"📱 Mobile Number: {mobile_number}\n"
+                f"👤 Name: {user.get('first_name', 'N/A')} {user.get('last_name', '')}\n"
+                f"📅 Registered: {user.get('created_at', 'N/A')[:10] if user.get('created_at') else 'N/A'}\n\n"
+                "What would you like to do?"
+            )
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_pc_{mobile_number}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_pc_{mobile_number}")
+                ]
+            ]
+            
+            try:
+                await context.bot.send_message(
+                    chat_id=ADMIN_USER_ID,
+                    text=admin_msg,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                
+                # Mark notification as processed
+                supabase.table('admin_notifications').update({'is_processed': True}).eq('id', notification['id']).execute()
+                logger.info(f"Admin notified about PC user: {mobile_number}")
+            except Exception as e:
+                logger.error(f"Error notifying admin about PC user: {e}")
+    
+    except Exception as e:
+        logger.error(f"Error checking PC user notifications: {e}")
+
+
 async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle admin approval/rejection callbacks"""
+    """Handle admin approval/rejection callbacks (both Telegram and PC users)"""
     query = update.callback_query
     await query.answer()
     
@@ -1422,55 +1498,96 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data
     
     if data.startswith("approve_"):
-        target_user_id = int(data.split("_")[1])
+        identifier = data.split("_", 1)[1]  # Get everything after "approve_"
         
-        # Update user status
-        await update_user_status(target_user_id, 'approved', admin_id)
-        
-        # Notify user
-        try:
-            await context.bot.send_message(
-                chat_id=target_user_id,
-                text=(
-                    "🎉 Congratulations!\n\n"
-                    "✅ Your account has been approved!\n\n"
-                    "📱 Send your phone number to start generating QR codes.\n\n"
-                    "⏰ Working Hours: 10:30 AM - 3:00 PM"
-                ),
-                reply_markup=get_user_keyboard()
+        # Check if it's a PC user (starts with "pc_")
+        if identifier.startswith("pc_"):
+            # PC user - use mobile number
+            mobile_number = identifier.replace("pc_", "")
+            
+            # Import PC user functions from backend_core
+            from backend_core import update_user_status_pc
+            
+            # Update PC user status
+            await update_user_status_pc(mobile_number, 'approved', admin_id)
+            
+            # PC users can't be notified via Telegram, so just log
+            logger.info(f"PC user {mobile_number} approved by admin {admin_id}")
+            
+            await query.edit_message_text(
+                f"{query.message.text}\n\n✅ Approved! (PC User)"
             )
-        except Exception as e:
-            logger.error(f"Error notifying user: {e}")
-        
-        # Update admin message
-        await query.edit_message_text(
-            f"{query.message.text}\n\n✅ Approved!"
-        )
+        else:
+            # Telegram user - use Telegram ID
+            target_user_id = int(identifier)
+            
+            # Update user status
+            await update_user_status(target_user_id, 'approved', admin_id)
+            
+            # Notify user
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user_id,
+                    text=(
+                        "🎉 Congratulations!\n\n"
+                        "✅ Your account has been approved!\n\n"
+                        "📱 Send your phone number to start generating QR codes.\n\n"
+                        "⏰ Working Hours: 10:30 AM - 3:00 PM"
+                    ),
+                    reply_markup=get_user_keyboard()
+                )
+            except Exception as e:
+                logger.error(f"Error notifying user: {e}")
+            
+            # Update admin message
+            await query.edit_message_text(
+                f"{query.message.text}\n\n✅ Approved!"
+            )
         
     elif data.startswith("reject_"):
-        target_user_id = int(data.split("_")[1])
+        identifier = data.split("_", 1)[1]  # Get everything after "reject_"
         
-        # Update user status
-        await update_user_status(target_user_id, 'rejected', admin_id)
-        
-        # Notify user
-        try:
-            await context.bot.send_message(
-                chat_id=target_user_id,
-                text=(
-                    "❌ Sorry!\n\n"
-                    "Your account has been rejected.\n"
-                    "Please contact admin for assistance."
-                ),
-                reply_markup=get_pending_keyboard()
+        # Check if it's a PC user
+        if identifier.startswith("pc_"):
+            # PC user - use mobile number
+            mobile_number = identifier.replace("pc_", "")
+            
+            # Import PC user functions from backend_core
+            from backend_core import update_user_status_pc
+            
+            # Update PC user status
+            await update_user_status_pc(mobile_number, 'rejected', admin_id)
+            
+            logger.info(f"PC user {mobile_number} rejected by admin {admin_id}")
+            
+            await query.edit_message_text(
+                f"{query.message.text}\n\n❌ Rejected! (PC User)"
             )
-        except Exception as e:
-            logger.error(f"Error notifying user: {e}")
-        
-        # Update admin message
-        await query.edit_message_text(
-            f"{query.message.text}\n\n❌ Rejected!"
-        )
+        else:
+            # Telegram user
+            target_user_id = int(identifier)
+            
+            # Update user status
+            await update_user_status(target_user_id, 'rejected', admin_id)
+            
+            # Notify user
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user_id,
+                    text=(
+                        "❌ Sorry!\n\n"
+                        "Your account has been rejected.\n"
+                        "Please contact admin for assistance."
+                    ),
+                    reply_markup=get_pending_keyboard()
+                )
+            except Exception as e:
+                logger.error(f"Error notifying user: {e}")
+            
+            # Update admin message
+            await query.edit_message_text(
+                f"{query.message.text}\n\n❌ Rejected!"
+            )
 
 
 async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1618,6 +1735,9 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Pending Users
         if text == BTN_ADMIN_PENDING:
+            # Check for new PC user notifications first
+            await check_and_notify_pc_users(context)
+            
             users = await get_pending_users_list()
             
             if not users:
@@ -1625,18 +1745,29 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 msg = f"⏳ Pending Users ({len(users)}):\n\n"
                 for u in users:
-                    username = u.get('username') or u.get('first_name') or f"ID: {u['telegram_user_id']}"
-                    msg += f"• {username}\n"
+                    user_type = u.get('user_type', 'telegram')
+                    if user_type == 'pc':
+                        # PC user - show mobile number
+                        mobile = u.get('mobile_number', 'N/A')
+                        username = f"PC User: {mobile}"
+                        identifier = f"pc_{mobile}"  # Use mobile number as identifier
+                    else:
+                        # Telegram user
+                        username = u.get('username') or u.get('first_name') or f"ID: {u['telegram_user_id']}"
+                        identifier = str(u['telegram_user_id'])
+                    
+                    user_type_emoji = "💻" if user_type == 'pc' else "📱"
+                    msg += f"{user_type_emoji} {username}\n"
                     
                     # Send approval buttons
                     keyboard = [
                         [
-                            InlineKeyboardButton("✅ Approve", callback_data=f"approve_{u['telegram_user_id']}"),
-                            InlineKeyboardButton("❌ Reject", callback_data=f"reject_{u['telegram_user_id']}")
+                            InlineKeyboardButton("✅ Approve", callback_data=f"approve_{identifier}"),
+                            InlineKeyboardButton("❌ Reject", callback_data=f"reject_{identifier}")
                         ]
                     ]
                     await update.message.reply_text(
-                        f"👤 {username}\n🆔 ID: {u['telegram_user_id']}",
+                        f"👤 {username}\n{'📱 Mobile' if user_type == 'pc' else '🆔 Telegram ID'}: {identifier.replace('pc_', '') if user_type == 'pc' else identifier}",
                         reply_markup=InlineKeyboardMarkup(keyboard)
                     )
             
