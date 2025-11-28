@@ -257,19 +257,46 @@ class PCQRTool:
             print(f"Could not set icon: {e}")
     
     def create_ui(self):
-        """Create the modern UI"""
+        """Create the modern UI with scrollable content"""
         # Configure root grid
         self.root.columnconfigure(1, weight=1)
         self.root.rowconfigure(0, weight=1)
         
-        # ========== LEFT SIDEBAR ==========
-        sidebar = tk.Frame(self.root, bg=COLORS['bg_sidebar'], width=320)
-        sidebar.grid(row=0, column=0, sticky='nsew')
-        sidebar.grid_propagate(False)
+        # ========== LEFT SIDEBAR (with scroll) ==========
+        # Create canvas and scrollbar for sidebar
+        sidebar_container = tk.Frame(self.root, bg=COLORS['bg_sidebar'], width=320)
+        sidebar_container.grid(row=0, column=0, sticky='nsew')
+        sidebar_container.grid_propagate(False)
+        
+        # Canvas for scrolling
+        sidebar_canvas = tk.Canvas(sidebar_container, bg=COLORS['bg_sidebar'], 
+                                   highlightthickness=0, width=300)
+        sidebar_scrollbar = tk.Scrollbar(sidebar_container, orient='vertical', 
+                                         command=sidebar_canvas.yview)
+        
+        # Scrollable frame inside canvas
+        sidebar = tk.Frame(sidebar_canvas, bg=COLORS['bg_sidebar'], width=300)
+        
+        # Configure canvas scrolling
+        sidebar.bind('<Configure>', lambda e: sidebar_canvas.configure(scrollregion=sidebar_canvas.bbox('all')))
+        sidebar_canvas.create_window((0, 0), window=sidebar, anchor='nw')
+        sidebar_canvas.configure(yscrollcommand=sidebar_scrollbar.set)
+        
+        # Pack canvas and scrollbar
+        sidebar_canvas.pack(side='left', fill='both', expand=True)
+        sidebar_scrollbar.pack(side='right', fill='y')
+        
+        # Enable mouse wheel scrolling on sidebar
+        def on_sidebar_mousewheel(event):
+            sidebar_canvas.yview_scroll(int(-1*(event.delta/120)), 'units')
+        
+        sidebar_canvas.bind_all('<MouseWheel>', on_sidebar_mousewheel)
+        sidebar.bind('<Enter>', lambda e: sidebar_canvas.bind_all('<MouseWheel>', on_sidebar_mousewheel))
+        sidebar.bind('<Leave>', lambda e: sidebar_canvas.unbind_all('<MouseWheel>'))
         
         # Sidebar inner padding
-        sidebar_inner = tk.Frame(sidebar, bg=COLORS['bg_sidebar'])
-        sidebar_inner.pack(fill='both', expand=True, padx=20, pady=20)
+        sidebar_inner = tk.Frame(sidebar, bg=COLORS['bg_sidebar'], width=280)
+        sidebar_inner.pack(fill='both', expand=True, padx=10, pady=20)
         
         # Logo and Title
         logo_frame = tk.Frame(sidebar_inner, bg=COLORS['bg_sidebar'])
