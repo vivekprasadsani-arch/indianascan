@@ -89,7 +89,7 @@ WORK_END_HOUR = 23  # 11:00 PM same day
 WORK_END_MINUTE = 0
 DAILY_RESET_HOUR = 8  # 8:00 AM
 DAILY_RESET_MINUTE = 0
-ADMIN_REPORT_HOUR = 15  # 3:00 PM
+ADMIN_REPORT_HOUR = 23  # 11:00 PM
 ADMIN_REPORT_MINUTE = 0
 
 # ==================== KEYBOARD BUTTONS ====================
@@ -333,16 +333,16 @@ def get_bd_date():
     return get_bd_time().date()
 
 def is_within_working_hours():
-    """Check if current time is within working hours (10:30 AM - 3:00 PM)"""
+    """Check if current time is within working hours (10:30 AM - 11:00 PM)"""
     now = get_bd_time()
     current_time = now.time()
     
-    # Working hours: 10:30 AM to 3:00 PM same day
-    start_time = dt_time(10, 30)  # 10:30 AM
-    end_time = dt_time(15, 0)  # 3:00 PM
+    # Working hours: 10:30 AM to 11:00 PM same day
+    start_time = dt_time(WORK_START_HOUR, WORK_START_MINUTE)  # 10:30 AM
+    end_time = dt_time(WORK_END_HOUR, WORK_END_MINUTE)  # 11:00 PM
     
-    # If current time is between 10:30 AM and 3:00 PM, working
-    if start_time <= current_time < end_time:
+    # If current time is between start and end, working
+    if start_time <= current_time <= end_time:
         return True
     
     return False
@@ -352,8 +352,8 @@ def get_working_hours_message():
     return (
         "⏰ Working hours ended!\n\n"
         "📅 Working Schedule:\n"
-        "• 10:30 AM to 3:00 PM\n\n"
-        "⏳ Please try again after 10:30 AM."
+        f"• {WORK_START_HOUR}:{WORK_START_MINUTE:02d} AM to {WORK_END_HOUR}:00 PM\n\n"
+        f"⏳ Please try again after {WORK_START_HOUR}:{WORK_START_MINUTE:02d} AM."
     )
 
 def normalize_phone_number(phone):
@@ -1417,7 +1417,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📱 Send your phone number to start generating QR codes.\n\n"
             "🌐 Login to all 4 websites = 1 number completed\n"
             "💰 Earn 10 Taka per completed number\n\n"
-            "⏰ Working Hours: 10:30 AM - 3:00 PM\n"
+            "⏰ Working Hours: 10:30 AM - 11:00 PM\n"
             "🔄 Daily reset at 8:00 AM"
             f"{stats_msg}"
         )
@@ -1546,7 +1546,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         "🎉 Congratulations!\n\n"
                         "✅ Your account has been approved!\n\n"
                         "📱 Send your phone number to start generating QR codes.\n\n"
-                        "⏰ Working Hours: 10:30 AM - 3:00 PM"
+                        "⏰ Working Hours: 10:30 AM - 11:00 PM"
                     ),
                     reply_markup=get_user_keyboard()
                 )
@@ -1629,7 +1629,7 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             "💰 Earnings:\n"
             "• 10 Taka per completed number\n\n"
             "⏰ Working Hours:\n"
-            "• 10:30 AM to 3:00 PM\n"
+            "• 10:30 AM to 11:00 PM\n"
             "• Daily reset at 8:00 AM\n\n"
             "📊 Commands:\n"
             "• /start - Restart bot\n"
@@ -1651,9 +1651,9 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"📆 Date: {now.strftime('%Y-%m-%d')}\n\n"
             f"🕐 Working Schedule:\n"
             f"• Start: 10:30 AM\n"
-            f"• End: 3:00 PM\n\n"
+            f"• End: 11:00 PM\n\n"
             f"🔄 Daily Reset: 8:00 AM\n"
-            f"📊 Admin Report: 3:00 PM"
+            f"📊 Admin Report: 11:00 PM"
         )
         keyboard = get_keyboard_for_user(user_id)
         await update.message.reply_text(hours_msg, reply_markup=keyboard)
@@ -2853,7 +2853,7 @@ async def daily_reset_job(context: ContextTypes.DEFAULT_TYPE):
                     text=(
                         "🔄 Daily Reset Complete!\n\n"
                         "📅 A new day has started.\n"
-                        "⏰ Working Hours: 10:30 AM - 3:00 PM\n\n"
+                        "⏰ Working Hours: 10:30 AM - 11:00 PM\n\n"
                         "📱 Send a phone number to start adding."
                     ),
                     reply_markup=get_keyboard_for_user(user_id)
@@ -2939,7 +2939,7 @@ def setup_scheduled_jobs(application: Application):
     job_queue.run_daily(daily_reset_job, time=reset_time, name="daily_reset")
     logger.info(f"Scheduled daily reset at {reset_time}")
     
-    # Admin report at 3:00 PM Bangladesh time
+    # Admin report at 11:00 PM Bangladesh time
     report_time = dt_time(hour=ADMIN_REPORT_HOUR, minute=ADMIN_REPORT_MINUTE, tzinfo=BD_TIMEZONE)
     job_queue.run_daily(admin_report_job, time=report_time, name="admin_report")
     logger.info(f"Scheduled admin report at {report_time}")

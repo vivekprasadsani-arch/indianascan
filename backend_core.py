@@ -228,15 +228,15 @@ def get_bd_date():
     return get_bd_time().date()
 
 def is_within_working_hours():
-    """Check if current time is within working hours (10:30 AM - 3:00 PM)"""
+    """Check if current time is within working hours (10:30 AM - 11:00 PM)"""
     now = get_bd_time()
     current_time = now.time()
     
-    # Working hours: 10:30 AM to 3:00 PM same day
-    start_time = dt_time(10, 30)  # 10:30 AM
-    end_time = dt_time(15, 0)  # 3:00 PM
+    # Working hours: 10:30 AM to 11:00 PM same day
+    start_time = dt_time(WORK_START_HOUR, WORK_START_MINUTE)  # 10:30 AM
+    end_time = dt_time(WORK_END_HOUR, WORK_END_MINUTE)  # 11:00 PM
     
-    # If current time is between 10:30 AM and 3:00 PM, working
+    # If current time is between start and end, working
     if start_time <= current_time <= end_time:
         return True
     
@@ -247,8 +247,8 @@ def get_working_hours_message():
     return (
         "⏰ Working hours ended!\n\n"
         "📅 Working Schedule:\n"
-        "• 10:30 AM to 3:00 PM\n\n"
-        "⏳ Please try again after 10:30 AM."
+        f"• {WORK_START_HOUR}:{WORK_START_MINUTE:02d} AM to {WORK_END_HOUR}:00 PM\n\n"
+        f"⏳ Please try again after {WORK_START_HOUR}:{WORK_START_MINUTE:02d} AM."
     )
 
 def normalize_phone_number(phone):
