@@ -2706,6 +2706,14 @@ async def daily_reset_job(context: ContextTypes.DEFAULT_TYPE):
         logger.error("Daily reset failed")
 
 
+async def check_pc_users_periodic(context: ContextTypes.DEFAULT_TYPE):
+    """Periodically check for new PC user registrations and notify admin"""
+    try:
+        await check_and_notify_pc_users(context)
+    except Exception as e:
+        logger.error(f"Error in periodic PC user check: {e}")
+
+
 async def admin_report_job(context: ContextTypes.DEFAULT_TYPE):
     """Send daily report to admin at 3 PM Bangladesh time"""
     logger.info("Running admin report job...")
@@ -2775,6 +2783,10 @@ def setup_scheduled_jobs(application: Application):
     report_time = dt_time(hour=ADMIN_REPORT_HOUR, minute=ADMIN_REPORT_MINUTE, tzinfo=BD_TIMEZONE)
     job_queue.run_daily(admin_report_job, time=report_time, name="admin_report")
     logger.info(f"Scheduled admin report at {report_time}")
+    
+    # Check for PC user notifications every 2 minutes
+    job_queue.run_repeating(check_pc_users_periodic, interval=120, first=10, name="check_pc_users")
+    logger.info("Scheduled PC user notification check every 2 minutes")
 
 
 # ==================== MAIN ====================
