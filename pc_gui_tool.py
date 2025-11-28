@@ -237,12 +237,19 @@ class PCQRTool:
     
     def set_window_icon(self):
         """Set WhatsApp icon as window icon"""
+        import os
         try:
-            icon_data = base64.b64decode(WHATSAPP_ICON_BASE64)
-            icon_image = Image.open(io.BytesIO(icon_data))
-            icon_photo = ImageTk.PhotoImage(icon_image)
-            self.root.iconphoto(True, icon_photo)
-            self.icon_photo = icon_photo  # Keep reference
+            # Try to use .ico file first (works best on Windows)
+            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'whatsapp.ico')
+            if os.path.exists(icon_path):
+                self.root.iconbitmap(icon_path)
+            else:
+                # Fallback to base64 PNG
+                icon_data = base64.b64decode(WHATSAPP_ICON_BASE64)
+                icon_image = Image.open(io.BytesIO(icon_data))
+                icon_photo = ImageTk.PhotoImage(icon_image)
+                self.root.iconphoto(True, icon_photo)
+                self.icon_photo = icon_photo  # Keep reference
         except Exception as e:
             print(f"Could not set icon: {e}")
     
