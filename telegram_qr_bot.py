@@ -185,8 +185,8 @@ for i in range(4):  # 4 websites
         "start_time": None
     }
 
-# Maximum time a user can hold a website (2 minutes)
-WEBSITE_TIMEOUT = 120
+# Maximum time a user can hold a website (10 minutes to match polling timeout)
+WEBSITE_TIMEOUT = 600
 
 def get_or_create_lock(website_index):
     """Get or create asyncio lock for a website"""
@@ -275,6 +275,12 @@ def get_queue_position(website_index: int, user_id: int) -> int:
 def get_queue_length(website_index: int) -> int:
     """Get total users waiting for a website"""
     return len(website_queues[website_index]["queue"])
+
+def refresh_website_lock_timer(website_index: int, user_id: int):
+    """Refresh website lock timer to prevent premature timeout while user is active"""
+    queue_data = website_queues.get(website_index)
+    if queue_data and queue_data.get("active_user") == user_id:
+        queue_data["start_time"] = time.time()
 
 async def cleanup_old_sessions():
     """Clean up sessions older than 10 minutes"""
@@ -2153,6 +2159,9 @@ async def poll_login_status(context: ContextTypes.DEFAULT_TYPE, user_id: int, we
         if user_id not in user_sessions or not user_sessions[user_id].get("is_polling"):
             logger.info(f"Polling stopped for user {user_id}")
             return
+        
+        # Keep the queue lock alive while this user is actively waiting
+        refresh_website_lock_timer(website_index, user_id)
         
         logger.info(f"Polling status for user {user_id}, website: {website['name']}")
         status_result = check_login_status(website, user_id, website_index)

@@ -14,10 +14,10 @@ import sys
 
 # Import shared backend
 from backend_core import (
-    WEBSITES, get_bd_time, is_within_working_hours, get_working_hours_message,
+    WEBSITES, is_within_working_hours, get_working_hours_message,
     normalize_phone_number, format_phone_number, get_site_name,
-    generate_qr_code, check_login_status, acquire_website_lock, release_website_lock,
-    get_queue_position, get_user_by_mobile_number, get_or_create_user_pc,
+    generate_qr_code, check_login_status,
+    get_or_create_user_pc,
     add_phone_number_pc, add_website_completion, mark_number_completed_pc,
     get_user_stats_pc, EARNINGS_PER_NUMBER
 )
@@ -26,8 +26,9 @@ class PCQRTool:
     def __init__(self, root):
         self.root = root
         self.root.title("QR Code Generator - PC Tool")
-        self.root.geometry("800x700")
+        self.root.geometry("1000x750")
         self.root.resizable(True, True)
+        self.root.configure(bg='#f0f0f0')
         
         # User state
         self.current_user = None
@@ -36,6 +37,7 @@ class PCQRTool:
         self.current_phone_number_id = None
         self.current_index = 0
         self.completed_websites = []
+        self.session_user_id = None
         self.is_polling = False
         self.polling_thread = None
         
@@ -46,82 +48,101 @@ class PCQRTool:
         self.check_login_state()
     
     def create_ui(self):
-        """Create the main UI"""
-        # Main container
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        self.root.columnconfigure(0, weight=1)
+        """Create the main UI with better organization"""
+        # Configure root
+        self.root.columnconfigure(1, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="QR Code Generator", font=("Arial", 20, "bold"))
+        # ========== LEFT SIDEBAR ==========
+        sidebar = ttk.Frame(self.root, width=280, padding="15")
+        sidebar.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+        sidebar.grid_propagate(False)
+        self.root.columnconfigure(0, weight=0)
+        
+        # Title in sidebar
+        title_label = ttk.Label(sidebar, text="QR Code\nGenerator", font=("Arial", 18, "bold"), justify=tk.CENTER)
         title_label.grid(row=0, column=0, pady=(0, 20))
         
-        # Login/User Info Frame
-        self.user_frame = ttk.LabelFrame(main_frame, text="User Information", padding="10")
-        self.user_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-        self.user_frame.columnconfigure(1, weight=1)
+        # User Information Section
+        user_section = ttk.LabelFrame(sidebar, text="👤 User Account", padding="12")
+        user_section.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        user_section.columnconfigure(0, weight=1)
         
-        # Mobile number input (for login/registration)
-        ttk.Label(self.user_frame, text="Your Mobile Number:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.mobile_entry = ttk.Entry(self.user_frame, width=30)
-        self.mobile_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        ttk.Label(user_section, text="Mobile Number:", font=("Arial", 9)).grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        self.mobile_entry = ttk.Entry(user_section, width=25, font=("Arial", 10))
+        self.mobile_entry.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         
-        self.login_btn = ttk.Button(self.user_frame, text="Login / Register", command=self.handle_login)
-        self.login_btn.grid(row=0, column=2, padx=5, pady=5)
+        self.login_btn = ttk.Button(user_section, text="Login / Register", command=self.handle_login, width=25)
+        self.login_btn.grid(row=2, column=0, pady=(0, 8))
         
-        # User status label
-        self.status_label = ttk.Label(self.user_frame, text="Status: Not logged in", foreground="gray")
-        self.status_label.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
+        self.status_label = ttk.Label(user_section, text="Status: Not logged in", foreground="gray", font=("Arial", 9), wraplength=240)
+        self.status_label.grid(row=3, column=0, sticky=tk.W, pady=(0, 8))
         
-        # Stats button
-        self.stats_btn = ttk.Button(self.user_frame, text="📊 My Stats", command=self.show_stats, state=tk.DISABLED)
-        self.stats_btn.grid(row=2, column=0, columnspan=3, pady=5)
+        self.stats_btn = ttk.Button(user_section, text="📊 View Statistics", command=self.show_stats, state=tk.DISABLED, width=25)
+        self.stats_btn.grid(row=4, column=0)
         
-        # Phone Number Input Frame
-        self.phone_frame = ttk.LabelFrame(main_frame, text="Phone Number to Scan", padding="10")
-        self.phone_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-        self.phone_frame.columnconfigure(1, weight=1)
+        # Phone Number Section
+        phone_section = ttk.LabelFrame(sidebar, text="📱 Scan Phone Number", padding="12")
+        phone_section.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        phone_section.columnconfigure(0, weight=1)
         
-        ttk.Label(self.phone_frame, text="Phone Number:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.phone_entry = ttk.Entry(self.phone_frame, width=30)
-        self.phone_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        ttk.Label(phone_section, text="Enter Phone Number:", font=("Arial", 9)).grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        self.phone_entry = ttk.Entry(phone_section, width=25, font=("Arial", 10))
+        self.phone_entry.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         
-        self.submit_btn = ttk.Button(self.phone_frame, text="Generate QR Codes", command=self.handle_phone_submit, state=tk.DISABLED)
-        self.submit_btn.grid(row=0, column=2, padx=5, pady=5)
+        self.submit_btn = ttk.Button(phone_section, text="🚀 Generate QR Codes", command=self.handle_phone_submit, state=tk.DISABLED, width=25)
+        self.submit_btn.grid(row=2, column=0)
         
-        # Progress Frame
-        self.progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding="10")
-        self.progress_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-        self.progress_frame.columnconfigure(0, weight=1)
+        # Progress Section
+        progress_section = ttk.LabelFrame(sidebar, text="📊 Progress", padding="12")
+        progress_section.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        progress_section.columnconfigure(0, weight=1)
         
-        self.progress_label = ttk.Label(self.progress_frame, text="Progress: ⬜ ⬜ ⬜ ⬜ (0/4)", font=("Arial", 12))
+        self.progress_label = ttk.Label(progress_section, text="Progress: ⬜ ⬜ ⬜ ⬜\n(0/4)", font=("Arial", 11, "bold"), justify=tk.CENTER)
         self.progress_label.grid(row=0, column=0, pady=5)
         
-        # Queue status
-        self.queue_label = ttk.Label(self.progress_frame, text="", foreground="orange")
+        self.queue_label = ttk.Label(
+            progress_section,
+            text="🖥️ PC tool আলাদা মেশিনে চলে — এখানে কোনো queue নেই।",
+            foreground="gray",
+            font=("Arial", 8),
+            wraplength=240,
+            justify=tk.CENTER
+        )
         self.queue_label.grid(row=1, column=0, pady=5)
         
-        # QR Code Display Frame
-        self.qr_frame = ttk.LabelFrame(main_frame, text="QR Code", padding="10")
-        self.qr_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        self.qr_frame.columnconfigure(0, weight=1)
-        self.qr_frame.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(4, weight=1)
+        # Regenerate button in sidebar
+        self.regenerate_btn = ttk.Button(sidebar, text="🔄 Regenerate QR", command=self.regenerate_qr, state=tk.DISABLED, width=25)
+        self.regenerate_btn.grid(row=4, column=0, pady=(10, 0))
         
-        # QR code image label
-        self.qr_label = ttk.Label(self.qr_frame, text="No QR code generated yet", anchor=tk.CENTER)
-        self.qr_label.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
+        # ========== MAIN AREA ==========
+        main_area = ttk.Frame(self.root, padding="15")
+        main_area.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_area.columnconfigure(0, weight=1)
+        main_area.rowconfigure(1, weight=1)
         
-        # Status text
-        self.status_text = scrolledtext.ScrolledText(self.qr_frame, height=5, wrap=tk.WORD, state=tk.DISABLED)
-        self.status_text.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
+        # QR Code Display Section
+        qr_section = ttk.LabelFrame(main_area, text="📱 QR Code - Scan with WhatsApp", padding="20")
+        qr_section.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        qr_section.columnconfigure(0, weight=1)
+        qr_section.rowconfigure(0, weight=1)
+        main_area.rowconfigure(0, weight=1)
         
-        # Regenerate button
-        self.regenerate_btn = ttk.Button(self.qr_frame, text="🔄 Regenerate QR", command=self.regenerate_qr, state=tk.DISABLED)
-        self.regenerate_btn.grid(row=2, column=0, pady=5)
+        # QR code image label (centered, larger)
+        self.qr_label = ttk.Label(qr_section, text="No QR code generated yet.\n\nPlease login and enter a phone number to start.", 
+                                  anchor=tk.CENTER, font=("Arial", 11), foreground="gray", justify=tk.CENTER)
+        self.qr_label.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=20)
+        
+        # Status/Log Section
+        log_section = ttk.LabelFrame(main_area, text="📝 Activity Log", padding="10")
+        log_section.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        log_section.columnconfigure(0, weight=1)
+        log_section.rowconfigure(0, weight=1)
+        main_area.rowconfigure(1, weight=1)
+        
+        self.status_text = scrolledtext.ScrolledText(log_section, height=8, wrap=tk.WORD, state=tk.DISABLED, 
+                                                      font=("Consolas", 9), bg='#fafafa')
+        self.status_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     
     def check_login_state(self):
         """Check if user should be auto-logged in (from previous session)"""
@@ -135,6 +156,16 @@ class PCQRTool:
         self.status_text.insert(tk.END, f"[{timestamp}] {message}\n")
         self.status_text.see(tk.END)
         self.status_text.config(state=tk.DISABLED)
+    
+    def get_session_user_id(self):
+        """Return stable session user ID for backend isolation."""
+        if not self.current_mobile:
+            return None
+        if self.session_user_id is None:
+            # Offset with large constant to avoid clashing with Telegram IDs
+            base = abs(hash(self.current_mobile)) % (10**9)
+            self.session_user_id = base + 5_000_000_000
+        return self.session_user_id
     
     async def handle_login_async(self, mobile_number):
         """Handle login/registration asynchronously"""
@@ -151,6 +182,7 @@ class PCQRTool:
             
             self.current_user = user
             self.current_mobile = normalized
+            self.session_user_id = None
             
             status = user.get('status', 'pending')
             
@@ -283,25 +315,15 @@ class PCQRTool:
             website = WEBSITES[next_index]
             site_name = get_site_name(next_index)
             
-            # Use mobile number as user_id for queue system
-            user_id = hash(self.current_mobile) % (10**9)  # Convert to int
-            
-            # Try to acquire lock
-            got_lock, queue_position = await acquire_website_lock(next_index, user_id)
-            
-            if not got_lock:
-                # In queue
-                self.root.after(0, lambda: self.update_queue_status(queue_position, next_index))
-                # Wait and retry
-                await asyncio.sleep(2)
-                return await self.generate_next_qr()
+            user_id = self.get_session_user_id()
+            if not user_id:
+                return False, "Please log in again to continue."
             
             # Generate QR code
             self.root.after(0, lambda: self.log_status(f"Generating QR code for {site_name}..."))
             qr_image, error = generate_qr_code(website, user_id, next_index)
             
             if error:
-                await release_website_lock(next_index, user_id)
                 return False, error
             
             # Display QR code
@@ -316,14 +338,6 @@ class PCQRTool:
         
         except Exception as e:
             return False, f"Error: {str(e)}"
-    
-    def update_queue_status(self, position, website_index):
-        """Update queue status display"""
-        site_name = get_site_name(website_index)
-        if position > 0:
-            self.queue_label.config(text=f"⏳ Waiting in queue for {site_name}... Position: {position}", foreground="orange")
-        else:
-            self.queue_label.config(text="", foreground="orange")
     
     def display_qr_code(self, qr_image_bytes, site_name):
         """Display QR code image"""
@@ -436,10 +450,6 @@ class PCQRTool:
         
         threading.Thread(target=add_completion, daemon=True).start()
         
-        # Release lock
-        user_id = hash(self.current_mobile) % (10**9)
-        asyncio.run(release_website_lock(website_index, user_id))
-        
         # Check if all completed
         if len(self.completed_websites) >= len(WEBSITES):
             self.handle_all_completed()
@@ -472,10 +482,6 @@ class PCQRTool:
         site_name = get_site_name(website_index)
         self.log_status(f"⏰ QR code expired for {site_name}. You can regenerate.")
         
-        # Release lock
-        user_id = hash(self.current_mobile) % (10**9)
-        asyncio.run(release_website_lock(website_index, user_id))
-    
     def handle_all_completed(self):
         """Handle all websites completed"""
         self.log_status("🎉 All websites completed!")
