@@ -429,23 +429,23 @@ class PCQRTool:
                 font=('Segoe UI', 10),
                 bg=COLORS['bg_card'], fg=COLORS['text_secondary']).pack(anchor='w', pady=(5, 0))
         
-        # QR code container
+        # QR code container - centered
         qr_container = tk.Frame(qr_frame, bg=COLORS['bg_card'])
-        qr_container.grid(row=1, column=0, sticky='nsew', padx=20, pady=(10, 20))
-        qr_container.columnconfigure(0, weight=1)
-        qr_container.rowconfigure(0, weight=1)
+        qr_container.grid(row=1, column=0, sticky='', padx=20, pady=(10, 20))
         
-        # QR code display area with border - larger for better QR visibility
-        qr_display = tk.Frame(qr_container, bg=COLORS['bg_input'], 
-                             highlightthickness=2, highlightbackground=COLORS['border'])
-        qr_display.place(relx=0.5, rely=0.5, anchor='center', width=320, height=320)
+        # QR code display area with border
+        qr_display = tk.Frame(qr_container, bg='white', 
+                             highlightthickness=2, highlightbackground=COLORS['border'],
+                             width=280, height=280)
+        qr_display.pack()
+        qr_display.pack_propagate(False)  # Keep fixed size
         
         self.qr_label = tk.Label(qr_display, 
                                 text="🔒\n\nNo QR Code Generated\n\nLogin and enter a phone number\nto start scanning",
-                                font=('Segoe UI', 12),
-                                bg=COLORS['bg_input'], fg=COLORS['text_muted'],
+                                font=('Segoe UI', 10),
+                                bg='white', fg=COLORS['text_muted'],
                                 justify='center')
-        self.qr_label.pack(expand=True, fill='both', padx=5, pady=5)
+        self.qr_label.pack(expand=True, fill='both')
         
         # Current site indicator
         self.site_indicator = tk.Label(qr_frame, text="",
@@ -743,8 +743,8 @@ class PCQRTool:
             qr_image_bytes.seek(0)
             img = Image.open(qr_image_bytes)
             
-            # Resize for display - fit within container
-            max_size = 300
+            # Resize for display - fit within 280x280 container
+            max_size = 270
             img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             
             # Convert to PhotoImage
@@ -1028,8 +1028,8 @@ class PCQRTool:
             qr_image_bytes.seek(0)
             img = Image.open(qr_image_bytes)
             
-            # Resize for display - fit within container
-            max_size = 300
+            # Resize for display - fit within 280x280 container
+            max_size = 270
             img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             
             # Convert to PhotoImage
