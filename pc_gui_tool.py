@@ -1,6 +1,7 @@
 """
 PC GUI Tool for QR Code Generation
 Desktop application for PC users to generate QR codes
+Modern UI with WhatsApp theme
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
@@ -11,6 +12,7 @@ import time
 from datetime import datetime
 import io
 import sys
+import base64
 
 # Import shared backend
 from backend_core import (
@@ -22,13 +24,199 @@ from backend_core import (
     get_user_stats_pc, EARNINGS_PER_NUMBER
 )
 
+# WhatsApp logo as base64 (green circle with phone icon)
+WHATSAPP_ICON_BASE64 = """
+iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAD
+iklEQVR4nO2WS2hcVRjHf+fOTGYmmUzeo0nTtPWBVhS7EBQXIrgRXYgg4kJBcOFCcCHiQnDhQnDh
+QlyIICKIiCC4EJFCFxYRoS4sKFIoUltrtLVNm6TNZDKZx517j4uZSSaTyUOn0o0/OHDv/c73/77/
+9zi3cJObXM8SoAuYBQTwDrAMzAOLwAXgPLAIXAHOAOeBAnAZuAb8BswBl4ALwCJwGbgKLAFLwFVg
+EbgCXAQuAYvAEnAN+A1YBK4A1+rXKwALwEWgCFwCrgLL1FkALoO9BrwB/AhsAt4GngQOAvcD9wH7
+gPuBfcA9wL3A3cDdQC/QB3QDPUAPsAnYBGwBeoFeoA/oBbqBLqATyAPtwCZgM9AN5IAOIJ/+zwFt
+QBbIpvdzQBuQAXJADsimuawNiOvPdFt7bwLIAJn0WQ7IpnPp/zYgk9bZZrUB7ek6swpsCcgAmbTO
+ZlKdbUBb+rwN8GhLyG6jLaNNYzQjjBuG85ZxTmhcVjHWBM4Jws8KwbkmpCgFZ4C5NMlcGrMA/J7+
+ngcKwCKwmM5fSHMXgCvpXI2ZNE8BuExzLQAl4GpjnOXBtpq00w3gu5TwDPBbmvy3dP53miMdfxPw
+M/AT8CPwI/ATMJeOC2n8BWAZ+C2Nvwz8CpwDfknPfgKuNqx7FVhO1znXuKYL+AXLy/8zZhXwXgvw
+C/CuMAaFkADSq4SQMEawhOYi4WEBDrq0Y3gS69KOOvSJzJ0Ep1F8JGKOhQr3xwn3uI6bBnFCOBQm
+7HMDdifK+4BXcSgKz+DIu1g6dF0b4Dn8CHznEn8q+BK4G8P3kj6PMGLxaJAw1pYwQDnkXhwG8XkA
++E7YfSrCj+p8JuxelEGFx1A6NawGbIqT/ADcKux2YTiEMoJPjPCQJBxJFI/7Lr3VhC5VBnA5DmNY
+wvCiCP0iPKXQhyMThC+Jz2EsEwgnJOEBPAZJ+ALFQZRBlE9J+AKYTCa4L1H6SJQT6ZqDKIMqDKF8
+gvI+yieofCQqHyh8hPKRyidY+lBGUD7Esp+EPoVeQekXuJNq0EdiX1f4VuFjYQzlQyyDWA4gdKDc
+h/Cpwq2Ofj+Ou7F0ovSJpdfRb8eyH0UF0BJ7g7/TlZBTmLuwu1H6UPpJ6HQ09+HQC9yC5TYs/cAI
+yr0onQp9otwH9KT1bUXoAQ5geQB4ELgD5XYStmHZguU2EoZR7sMyjOVBhD4suxK1/cA2Em4HbgcG
+FAbSehhhBKWPhAEs3Q7tHm4XMADcAdwF3AnchXIHll4sd2LZjWU3lruBISy7sfSlde6ij/8AvuCf
+lF/5H9YfRvgYJVTBj5UAAAAASUVORK5CYII=
+"""
+
+# Modern color scheme (WhatsApp inspired)
+COLORS = {
+    'bg_dark': '#0a1014',           # Very dark background
+    'bg_main': '#111b21',           # Main background (WhatsApp dark)
+    'bg_sidebar': '#1f2c34',        # Sidebar background
+    'bg_card': '#202c33',           # Card background
+    'bg_input': '#2a3942',          # Input background
+    'accent': '#00a884',            # WhatsApp green
+    'accent_hover': '#06cf9c',      # Lighter green for hover
+    'accent_dark': '#008069',       # Darker green
+    'text_primary': '#e9edef',      # Primary text (light)
+    'text_secondary': '#8696a0',    # Secondary text (gray)
+    'text_muted': '#667781',        # Muted text
+    'success': '#00a884',           # Success green
+    'error': '#f15c6d',             # Error red
+    'warning': '#f7c94a',           # Warning yellow
+    'border': '#2a3942',            # Border color
+    'highlight': '#005c4b',         # Highlight/selection
+}
+
+
+class ModernButton(tk.Canvas):
+    """Custom modern rounded button"""
+    def __init__(self, parent, text, command=None, width=200, height=40, 
+                 bg=COLORS['accent'], fg='white', hover_bg=COLORS['accent_hover'],
+                 disabled_bg=COLORS['bg_input'], font_size=11, **kwargs):
+        super().__init__(parent, width=width, height=height, 
+                        bg=parent.cget('bg') if hasattr(parent, 'cget') else COLORS['bg_main'],
+                        highlightthickness=0, **kwargs)
+        
+        self.command = command
+        self.text = text
+        self.width = width
+        self.height = height
+        self.bg = bg
+        self.fg = fg
+        self.hover_bg = hover_bg
+        self.disabled_bg = disabled_bg
+        self.font_size = font_size
+        self._state = 'normal'
+        self._current_bg = bg
+        
+        self.draw_button()
+        
+        self.bind('<Enter>', self.on_enter)
+        self.bind('<Leave>', self.on_leave)
+        self.bind('<Button-1>', self.on_click)
+    
+    def draw_button(self):
+        self.delete('all')
+        radius = 8
+        
+        # Draw rounded rectangle
+        self.create_rounded_rect(2, 2, self.width-2, self.height-2, radius, 
+                                fill=self._current_bg, outline='')
+        
+        # Draw text
+        self.create_text(self.width//2, self.height//2, text=self.text,
+                        fill=self.fg if self._state == 'normal' else COLORS['text_muted'],
+                        font=('Segoe UI', self.font_size, 'bold'))
+    
+    def create_rounded_rect(self, x1, y1, x2, y2, radius, **kwargs):
+        points = [
+            x1+radius, y1, x2-radius, y1,
+            x2, y1, x2, y1+radius,
+            x2, y2-radius, x2, y2,
+            x2-radius, y2, x1+radius, y2,
+            x1, y2, x1, y2-radius,
+            x1, y1+radius, x1, y1
+        ]
+        return self.create_polygon(points, smooth=True, **kwargs)
+    
+    def on_enter(self, event):
+        if self._state == 'normal':
+            self._current_bg = self.hover_bg
+            self.draw_button()
+            self.config(cursor='hand2')
+    
+    def on_leave(self, event):
+        if self._state == 'normal':
+            self._current_bg = self.bg
+            self.draw_button()
+            self.config(cursor='')
+    
+    def on_click(self, event):
+        if self._state == 'normal' and self.command:
+            self.command()
+    
+    def configure(self, **kwargs):
+        if 'state' in kwargs:
+            self._state = kwargs.pop('state')
+            self._current_bg = self.bg if self._state == 'normal' else self.disabled_bg
+            self.draw_button()
+        if 'text' in kwargs:
+            self.text = kwargs.pop('text')
+            self.draw_button()
+        super().configure(**kwargs)
+    
+    def config(self, **kwargs):
+        self.configure(**kwargs)
+
+
+class ModernEntry(tk.Frame):
+    """Custom modern entry with rounded border"""
+    def __init__(self, parent, placeholder="", width=25, **kwargs):
+        super().__init__(parent, bg=COLORS['bg_input'], highlightthickness=2,
+                        highlightbackground=COLORS['border'], highlightcolor=COLORS['accent'])
+        
+        self.placeholder = placeholder
+        self.placeholder_color = COLORS['text_muted']
+        self.text_color = COLORS['text_primary']
+        self.has_placeholder = True
+        
+        self.entry = tk.Entry(self, bg=COLORS['bg_input'], fg=self.placeholder_color,
+                             insertbackground=COLORS['text_primary'],
+                             font=('Segoe UI', 11), relief='flat', width=width,
+                             bd=8)
+        self.entry.pack(fill='both', expand=True, padx=2, pady=2)
+        
+        if placeholder:
+            self.entry.insert(0, placeholder)
+            self.entry.bind('<FocusIn>', self.on_focus_in)
+            self.entry.bind('<FocusOut>', self.on_focus_out)
+    
+    def on_focus_in(self, event):
+        if self.has_placeholder:
+            self.entry.delete(0, 'end')
+            self.entry.config(fg=self.text_color)
+            self.has_placeholder = False
+    
+    def on_focus_out(self, event):
+        if not self.entry.get():
+            self.entry.insert(0, self.placeholder)
+            self.entry.config(fg=self.placeholder_color)
+            self.has_placeholder = True
+    
+    def get(self):
+        if self.has_placeholder:
+            return ""
+        return self.entry.get()
+    
+    def delete(self, first, last):
+        self.entry.delete(first, last)
+        if not self.entry.get():
+            self.entry.insert(0, self.placeholder)
+            self.entry.config(fg=self.placeholder_color)
+            self.has_placeholder = True
+    
+    def insert(self, index, string):
+        if self.has_placeholder:
+            self.entry.delete(0, 'end')
+            self.has_placeholder = False
+            self.entry.config(fg=self.text_color)
+        self.entry.insert(index, string)
+    
+    def configure(self, **kwargs):
+        if 'state' in kwargs:
+            self.entry.config(state=kwargs['state'])
+
+
 class PCQRTool:
     def __init__(self, root):
         self.root = root
-        self.root.title("QR Code Generator - PC Tool")
-        self.root.geometry("1000x750")
-        self.root.resizable(True, True)
-        self.root.configure(bg='#f0f0f0')
+        self.root.title("WhatsApp QR Scanner")
+        self.root.geometry("1100x700")
+        self.root.minsize(900, 600)
+        self.root.configure(bg=COLORS['bg_main'])
+        
+        # Set window icon
+        self.set_window_icon()
         
         # User state
         self.current_user = None
@@ -47,115 +235,274 @@ class PCQRTool:
         # Check if user is logged in
         self.check_login_state()
     
+    def set_window_icon(self):
+        """Set WhatsApp icon as window icon"""
+        try:
+            icon_data = base64.b64decode(WHATSAPP_ICON_BASE64)
+            icon_image = Image.open(io.BytesIO(icon_data))
+            icon_photo = ImageTk.PhotoImage(icon_image)
+            self.root.iconphoto(True, icon_photo)
+            self.icon_photo = icon_photo  # Keep reference
+        except Exception as e:
+            print(f"Could not set icon: {e}")
+    
     def create_ui(self):
-        """Create the main UI with better organization"""
-        # Configure root
+        """Create the modern UI"""
+        # Configure root grid
         self.root.columnconfigure(1, weight=1)
         self.root.rowconfigure(0, weight=1)
         
         # ========== LEFT SIDEBAR ==========
-        sidebar = ttk.Frame(self.root, width=280, padding="15")
-        sidebar.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+        sidebar = tk.Frame(self.root, bg=COLORS['bg_sidebar'], width=320)
+        sidebar.grid(row=0, column=0, sticky='nsew')
         sidebar.grid_propagate(False)
-        self.root.columnconfigure(0, weight=0)
         
-        # Title in sidebar
-        title_label = ttk.Label(sidebar, text="QR Code\nGenerator", font=("Arial", 18, "bold"), justify=tk.CENTER)
-        title_label.grid(row=0, column=0, pady=(0, 20))
+        # Sidebar inner padding
+        sidebar_inner = tk.Frame(sidebar, bg=COLORS['bg_sidebar'])
+        sidebar_inner.pack(fill='both', expand=True, padx=20, pady=20)
         
-        # User Information Section
-        user_section = ttk.LabelFrame(sidebar, text="👤 User Account", padding="12")
-        user_section.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        user_section.columnconfigure(0, weight=1)
+        # Logo and Title
+        logo_frame = tk.Frame(sidebar_inner, bg=COLORS['bg_sidebar'])
+        logo_frame.pack(fill='x', pady=(0, 30))
         
-        ttk.Label(user_section, text="Mobile Number:", font=("Arial", 9)).grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-        self.mobile_entry = ttk.Entry(user_section, width=25, font=("Arial", 10))
-        self.mobile_entry.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
+        # WhatsApp-style header
+        header_text = tk.Label(logo_frame, text="📱 WhatsApp", 
+                              font=('Segoe UI', 22, 'bold'),
+                              bg=COLORS['bg_sidebar'], fg=COLORS['accent'])
+        header_text.pack(anchor='w')
         
-        self.login_btn = ttk.Button(user_section, text="Login / Register", command=self.handle_login, width=25)
-        self.login_btn.grid(row=2, column=0, pady=(0, 8))
+        subtitle = tk.Label(logo_frame, text="QR Code Scanner Tool",
+                           font=('Segoe UI', 11),
+                           bg=COLORS['bg_sidebar'], fg=COLORS['text_secondary'])
+        subtitle.pack(anchor='w', pady=(5, 0))
         
-        self.status_label = ttk.Label(user_section, text="Status: Not logged in", foreground="gray", font=("Arial", 9), wraplength=240)
-        self.status_label.grid(row=3, column=0, sticky=tk.W, pady=(0, 8))
+        # Divider
+        divider = tk.Frame(sidebar_inner, bg=COLORS['border'], height=1)
+        divider.pack(fill='x', pady=(0, 20))
         
-        self.stats_btn = ttk.Button(user_section, text="📊 View Statistics", command=self.show_stats, state=tk.DISABLED, width=25)
-        self.stats_btn.grid(row=4, column=0)
+        # ===== User Account Section =====
+        user_section = tk.Frame(sidebar_inner, bg=COLORS['bg_card'])
+        user_section.pack(fill='x', pady=(0, 15))
         
-        # Phone Number Section
-        phone_section = ttk.LabelFrame(sidebar, text="📱 Scan Phone Number", padding="12")
-        phone_section.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        phone_section.columnconfigure(0, weight=1)
+        # Section header
+        section_header = tk.Frame(user_section, bg=COLORS['bg_card'])
+        section_header.pack(fill='x', padx=15, pady=(15, 10))
         
-        ttk.Label(phone_section, text="Enter Phone Number:", font=("Arial", 9)).grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-        self.phone_entry = ttk.Entry(phone_section, width=25, font=("Arial", 10))
-        self.phone_entry.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
+        tk.Label(section_header, text="👤 User Account",
+                font=('Segoe UI', 12, 'bold'),
+                bg=COLORS['bg_card'], fg=COLORS['text_primary']).pack(anchor='w')
         
-        self.submit_btn = ttk.Button(phone_section, text="🚀 Generate QR Codes", command=self.handle_phone_submit, state=tk.DISABLED, width=25)
-        self.submit_btn.grid(row=2, column=0)
+        # Mobile input
+        input_frame = tk.Frame(user_section, bg=COLORS['bg_card'])
+        input_frame.pack(fill='x', padx=15, pady=(0, 10))
         
-        # Progress Section
-        progress_section = ttk.LabelFrame(sidebar, text="📊 Progress", padding="12")
-        progress_section.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        progress_section.columnconfigure(0, weight=1)
+        tk.Label(input_frame, text="Mobile Number",
+                font=('Segoe UI', 9),
+                bg=COLORS['bg_card'], fg=COLORS['text_secondary']).pack(anchor='w', pady=(0, 5))
         
-        self.progress_label = ttk.Label(progress_section, text="Progress: ⬜ ⬜ ⬜ ⬜\n(0/4)", font=("Arial", 11, "bold"), justify=tk.CENTER)
-        self.progress_label.grid(row=0, column=0, pady=5)
+        self.mobile_entry = ModernEntry(input_frame, placeholder="Enter your mobile number", width=28)
+        self.mobile_entry.pack(fill='x')
         
-        self.queue_label = ttk.Label(
-            progress_section,
-            text="🖥️ PC tool আলাদা মেশিনে চলে — এখানে কোনো queue নেই।",
-            foreground="gray",
-            font=("Arial", 8),
-            wraplength=240,
-            justify=tk.CENTER
-        )
-        self.queue_label.grid(row=1, column=0, pady=5)
+        # Login button
+        btn_frame = tk.Frame(user_section, bg=COLORS['bg_card'])
+        btn_frame.pack(fill='x', padx=15, pady=(10, 15))
         
-        # Regenerate button in sidebar
-        self.regenerate_btn = ttk.Button(sidebar, text="🔄 Regenerate QR", command=self.regenerate_qr, state=tk.DISABLED, width=25)
-        self.regenerate_btn.grid(row=4, column=0, pady=(10, 0))
+        self.login_btn = ModernButton(btn_frame, text="🔐 Login / Register", 
+                                      command=self.handle_login, width=258, height=42)
+        self.login_btn.pack(fill='x')
+        
+        # Status label
+        self.status_label = tk.Label(user_section, text="Status: Not logged in",
+                                    font=('Segoe UI', 9),
+                                    bg=COLORS['bg_card'], fg=COLORS['text_muted'],
+                                    wraplength=250, justify='left')
+        self.status_label.pack(anchor='w', padx=15, pady=(0, 15))
+        
+        # ===== Phone Number Section =====
+        phone_section = tk.Frame(sidebar_inner, bg=COLORS['bg_card'])
+        phone_section.pack(fill='x', pady=(0, 15))
+        
+        section_header2 = tk.Frame(phone_section, bg=COLORS['bg_card'])
+        section_header2.pack(fill='x', padx=15, pady=(15, 10))
+        
+        tk.Label(section_header2, text="📱 Scan Phone Number",
+                font=('Segoe UI', 12, 'bold'),
+                bg=COLORS['bg_card'], fg=COLORS['text_primary']).pack(anchor='w')
+        
+        input_frame2 = tk.Frame(phone_section, bg=COLORS['bg_card'])
+        input_frame2.pack(fill='x', padx=15, pady=(0, 10))
+        
+        tk.Label(input_frame2, text="Phone Number to Add",
+                font=('Segoe UI', 9),
+                bg=COLORS['bg_card'], fg=COLORS['text_secondary']).pack(anchor='w', pady=(0, 5))
+        
+        self.phone_entry = ModernEntry(input_frame2, placeholder="Enter phone number", width=28)
+        self.phone_entry.pack(fill='x')
+        
+        btn_frame2 = tk.Frame(phone_section, bg=COLORS['bg_card'])
+        btn_frame2.pack(fill='x', padx=15, pady=(10, 15))
+        
+        self.submit_btn = ModernButton(btn_frame2, text="🚀 Generate QR Codes",
+                                       command=self.handle_phone_submit, width=258, height=42)
+        self.submit_btn.configure(state='disabled')
+        self.submit_btn.pack(fill='x')
+        
+        # ===== Progress Section =====
+        progress_section = tk.Frame(sidebar_inner, bg=COLORS['bg_card'])
+        progress_section.pack(fill='x', pady=(0, 15))
+        
+        section_header3 = tk.Frame(progress_section, bg=COLORS['bg_card'])
+        section_header3.pack(fill='x', padx=15, pady=(15, 10))
+        
+        tk.Label(section_header3, text="📊 Progress",
+                font=('Segoe UI', 12, 'bold'),
+                bg=COLORS['bg_card'], fg=COLORS['text_primary']).pack(anchor='w')
+        
+        # Progress indicators
+        self.progress_frame = tk.Frame(progress_section, bg=COLORS['bg_card'])
+        self.progress_frame.pack(fill='x', padx=15, pady=(0, 10))
+        
+        # Create progress circles
+        self.progress_indicators = []
+        progress_row = tk.Frame(self.progress_frame, bg=COLORS['bg_card'])
+        progress_row.pack(anchor='center')
+        
+        for i in range(4):
+            indicator = tk.Label(progress_row, text="○", font=('Segoe UI', 24),
+                               bg=COLORS['bg_card'], fg=COLORS['text_muted'])
+            indicator.pack(side='left', padx=8)
+            self.progress_indicators.append(indicator)
+        
+        self.progress_label = tk.Label(progress_section, text="0 / 4 Completed",
+                                       font=('Segoe UI', 10),
+                                       bg=COLORS['bg_card'], fg=COLORS['text_secondary'])
+        self.progress_label.pack(pady=(0, 15))
+        
+        # ===== Action Buttons =====
+        action_frame = tk.Frame(sidebar_inner, bg=COLORS['bg_sidebar'])
+        action_frame.pack(fill='x', pady=(0, 10))
+        
+        self.regenerate_btn = ModernButton(action_frame, text="🔄 Regenerate QR",
+                                           command=self.regenerate_qr, width=280, height=38,
+                                           bg=COLORS['bg_card'], hover_bg=COLORS['highlight'])
+        self.regenerate_btn.configure(state='disabled')
+        self.regenerate_btn.pack(fill='x', pady=(0, 10))
+        
+        self.stats_btn = ModernButton(action_frame, text="📈 View Statistics",
+                                      command=self.show_stats, width=280, height=38,
+                                      bg=COLORS['bg_card'], hover_bg=COLORS['highlight'])
+        self.stats_btn.configure(state='disabled')
+        self.stats_btn.pack(fill='x')
         
         # ========== MAIN AREA ==========
-        main_area = ttk.Frame(self.root, padding="15")
-        main_area.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_area = tk.Frame(self.root, bg=COLORS['bg_main'])
+        main_area.grid(row=0, column=1, sticky='nsew', padx=20, pady=20)
         main_area.columnconfigure(0, weight=1)
+        main_area.rowconfigure(0, weight=3)
         main_area.rowconfigure(1, weight=1)
         
-        # QR Code Display Section
-        qr_section = ttk.LabelFrame(main_area, text="📱 QR Code - Scan with WhatsApp", padding="20")
-        qr_section.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        qr_section.columnconfigure(0, weight=1)
-        qr_section.rowconfigure(0, weight=1)
-        main_area.rowconfigure(0, weight=1)
+        # ===== QR Code Display =====
+        qr_frame = tk.Frame(main_area, bg=COLORS['bg_card'])
+        qr_frame.grid(row=0, column=0, sticky='nsew', pady=(0, 15))
+        qr_frame.columnconfigure(0, weight=1)
+        qr_frame.rowconfigure(1, weight=1)
         
-        # QR code image label (centered, larger)
-        self.qr_label = ttk.Label(qr_section, text="No QR code generated yet.\n\nPlease login and enter a phone number to start.", 
-                                  anchor=tk.CENTER, font=("Arial", 11), foreground="gray", justify=tk.CENTER)
-        self.qr_label.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=20)
+        # QR section header
+        qr_header = tk.Frame(qr_frame, bg=COLORS['bg_card'])
+        qr_header.grid(row=0, column=0, sticky='ew', padx=20, pady=(20, 10))
         
-        # Status/Log Section
-        log_section = ttk.LabelFrame(main_area, text="📝 Activity Log", padding="10")
-        log_section.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        log_section.columnconfigure(0, weight=1)
-        log_section.rowconfigure(0, weight=1)
-        main_area.rowconfigure(1, weight=1)
+        tk.Label(qr_header, text="📱 Scan QR Code with WhatsApp",
+                font=('Segoe UI', 14, 'bold'),
+                bg=COLORS['bg_card'], fg=COLORS['text_primary']).pack(anchor='w')
         
-        self.status_text = scrolledtext.ScrolledText(log_section, height=8, wrap=tk.WORD, state=tk.DISABLED, 
-                                                      font=("Consolas", 9), bg='#fafafa')
-        self.status_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        tk.Label(qr_header, text="Open WhatsApp > Settings > Linked Devices > Link a Device",
+                font=('Segoe UI', 10),
+                bg=COLORS['bg_card'], fg=COLORS['text_secondary']).pack(anchor='w', pady=(5, 0))
+        
+        # QR code container
+        qr_container = tk.Frame(qr_frame, bg=COLORS['bg_card'])
+        qr_container.grid(row=1, column=0, sticky='nsew', padx=20, pady=(10, 20))
+        qr_container.columnconfigure(0, weight=1)
+        qr_container.rowconfigure(0, weight=1)
+        
+        # QR code display area with border
+        qr_display = tk.Frame(qr_container, bg=COLORS['bg_input'], 
+                             highlightthickness=2, highlightbackground=COLORS['border'])
+        qr_display.place(relx=0.5, rely=0.5, anchor='center', width=350, height=350)
+        
+        self.qr_label = tk.Label(qr_display, 
+                                text="🔒\n\nNo QR Code Generated\n\nLogin and enter a phone number\nto start scanning",
+                                font=('Segoe UI', 12),
+                                bg=COLORS['bg_input'], fg=COLORS['text_muted'],
+                                justify='center')
+        self.qr_label.pack(expand=True, fill='both', padx=20, pady=20)
+        
+        # Current site indicator
+        self.site_indicator = tk.Label(qr_frame, text="",
+                                       font=('Segoe UI', 11, 'bold'),
+                                       bg=COLORS['bg_card'], fg=COLORS['accent'])
+        self.site_indicator.grid(row=2, column=0, pady=(0, 15))
+        
+        # ===== Activity Log =====
+        log_frame = tk.Frame(main_area, bg=COLORS['bg_card'])
+        log_frame.grid(row=1, column=0, sticky='nsew')
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(1, weight=1)
+        
+        log_header = tk.Frame(log_frame, bg=COLORS['bg_card'])
+        log_header.grid(row=0, column=0, sticky='ew', padx=15, pady=(15, 10))
+        
+        tk.Label(log_header, text="📝 Activity Log",
+                font=('Segoe UI', 12, 'bold'),
+                bg=COLORS['bg_card'], fg=COLORS['text_primary']).pack(anchor='w')
+        
+        # Custom styled text widget
+        log_container = tk.Frame(log_frame, bg=COLORS['bg_input'])
+        log_container.grid(row=1, column=0, sticky='nsew', padx=15, pady=(0, 15))
+        log_container.columnconfigure(0, weight=1)
+        log_container.rowconfigure(0, weight=1)
+        
+        self.status_text = tk.Text(log_container, height=6, wrap='word',
+                                   bg=COLORS['bg_input'], fg=COLORS['text_secondary'],
+                                   font=('Consolas', 10), relief='flat',
+                                   insertbackground=COLORS['text_primary'],
+                                   selectbackground=COLORS['highlight'],
+                                   padx=10, pady=10)
+        self.status_text.grid(row=0, column=0, sticky='nsew')
+        self.status_text.config(state='disabled')
+        
+        # Scrollbar
+        scrollbar = tk.Scrollbar(log_container, command=self.status_text.yview,
+                                bg=COLORS['bg_input'], troughcolor=COLORS['bg_input'])
+        scrollbar.grid(row=0, column=1, sticky='ns')
+        self.status_text.config(yscrollcommand=scrollbar.set)
     
     def check_login_state(self):
         """Check if user should be auto-logged in (from previous session)"""
         # Could implement session persistence here
         pass
     
-    def log_status(self, message):
-        """Log status message"""
-        self.status_text.config(state=tk.NORMAL)
+    def log_status(self, message, msg_type='info'):
+        """Log status message with color coding"""
+        self.status_text.config(state='normal')
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.status_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.status_text.see(tk.END)
-        self.status_text.config(state=tk.DISABLED)
+        
+        # Add tag for coloring
+        tag_name = f"tag_{len(self.status_text.get('1.0', 'end'))}"
+        
+        if msg_type == 'success':
+            color = COLORS['success']
+        elif msg_type == 'error':
+            color = COLORS['error']
+        elif msg_type == 'warning':
+            color = COLORS['warning']
+        else:
+            color = COLORS['text_secondary']
+        
+        self.status_text.tag_config(tag_name, foreground=color)
+        self.status_text.insert('end', f"[{timestamp}] {message}\n", tag_name)
+        self.status_text.see('end')
+        self.status_text.config(state='disabled')
     
     def get_session_user_id(self):
         """Return stable session user ID for backend isolation."""
@@ -187,9 +534,9 @@ class PCQRTool:
             status = user.get('status', 'pending')
             
             if status == 'pending':
-                return False, "Your account is pending approval. Admin will review your request."
+                return False, "Your account is pending approval.\nAdmin will review your request soon."
             elif status == 'rejected':
-                return False, "Your account has been rejected. Please contact admin."
+                return False, "Your account has been rejected.\nPlease contact admin."
             elif status == 'approved':
                 return True, "Login successful!"
             else:
@@ -202,11 +549,11 @@ class PCQRTool:
         """Handle login button click"""
         mobile = self.mobile_entry.get().strip()
         if not mobile:
-            messagebox.showerror("Error", "Please enter your mobile number")
+            self.show_modern_message("Error", "Please enter your mobile number", "error")
             return
         
-        self.login_btn.config(state=tk.DISABLED, text="Checking...")
-        self.log_status("Checking login...")
+        self.login_btn.configure(state='disabled', text="⏳ Checking...")
+        self.log_status("Checking login credentials...")
         
         def login_thread():
             loop = asyncio.new_event_loop()
@@ -220,19 +567,58 @@ class PCQRTool:
     
     def login_callback(self, success, message):
         """Callback after login attempt"""
-        self.login_btn.config(state=tk.NORMAL, text="Login / Register")
+        self.login_btn.configure(state='normal', text="🔐 Login / Register")
         
         if success:
-            self.status_label.config(text=f"Status: ✅ Logged in as {format_phone_number(self.current_mobile)}", foreground="green")
-            self.submit_btn.config(state=tk.NORMAL)
-            self.stats_btn.config(state=tk.NORMAL)
-            self.mobile_entry.config(state=tk.DISABLED)
-            self.log_status(message)
-            messagebox.showinfo("Success", message)
+            self.status_label.config(text=f"✅ Logged in: {format_phone_number(self.current_mobile)}", 
+                                    fg=COLORS['success'])
+            self.submit_btn.configure(state='normal')
+            self.stats_btn.configure(state='normal')
+            self.mobile_entry.configure(state='disabled')
+            self.log_status(message, 'success')
+            self.show_modern_message("Success", message, "success")
         else:
-            self.status_label.config(text=f"Status: ❌ {message}", foreground="red")
-            self.log_status(message)
-            messagebox.showerror("Error", message)
+            self.status_label.config(text=f"❌ {message}", fg=COLORS['error'])
+            self.log_status(message, 'error')
+            self.show_modern_message("Error", message, "error")
+    
+    def show_modern_message(self, title, message, msg_type='info'):
+        """Show a modern-styled message dialog"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("400x200")
+        dialog.configure(bg=COLORS['bg_card'])
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 200) // 2
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Icon
+        if msg_type == 'success':
+            icon = "✅"
+            color = COLORS['success']
+        elif msg_type == 'error':
+            icon = "❌"
+            color = COLORS['error']
+        else:
+            icon = "ℹ️"
+            color = COLORS['accent']
+        
+        tk.Label(dialog, text=icon, font=('Segoe UI', 36),
+                bg=COLORS['bg_card'], fg=color).pack(pady=(20, 10))
+        
+        tk.Label(dialog, text=message, font=('Segoe UI', 11),
+                bg=COLORS['bg_card'], fg=COLORS['text_primary'],
+                wraplength=350, justify='center').pack(pady=(0, 20))
+        
+        ok_btn = ModernButton(dialog, text="OK", command=dialog.destroy,
+                             width=100, height=35)
+        ok_btn.pack()
     
     async def handle_phone_submit_async(self, phone_number):
         """Handle phone number submission asynchronously"""
@@ -273,11 +659,11 @@ class PCQRTool:
         """Handle phone number submit button click"""
         phone = self.phone_entry.get().strip()
         if not phone:
-            messagebox.showerror("Error", "Please enter a phone number")
+            self.show_modern_message("Error", "Please enter a phone number", "error")
             return
         
-        self.submit_btn.config(state=tk.DISABLED, text="Processing...")
-        self.log_status(f"Processing phone number: {format_phone_number(phone)}")
+        self.submit_btn.configure(state='disabled', text="⏳ Processing...")
+        self.log_status(f"Processing: {format_phone_number(phone)}")
         
         def submit_thread():
             loop = asyncio.new_event_loop()
@@ -291,11 +677,11 @@ class PCQRTool:
     
     def submit_callback(self, success, message):
         """Callback after phone submit"""
-        self.submit_btn.config(state=tk.NORMAL, text="Generate QR Codes")
+        self.submit_btn.configure(state='normal', text="🚀 Generate QR Codes")
         
         if not success:
-            self.log_status(f"Error: {message}")
-            messagebox.showerror("Error", message)
+            self.log_status(f"Error: {message}", 'error')
+            self.show_modern_message("Error", message, "error")
     
     async def generate_next_qr(self):
         """Generate QR code for next website"""
@@ -320,7 +706,8 @@ class PCQRTool:
                 return False, "Please log in again to continue."
             
             # Generate QR code
-            self.root.after(0, lambda: self.log_status(f"Generating QR code for {site_name}..."))
+            self.root.after(0, lambda: self.log_status(f"Generating QR for {site_name}..."))
+            self.root.after(0, lambda: self.site_indicator.config(text=f"🔄 Current: {site_name}"))
             qr_image, error = generate_qr_code(website, user_id, next_index)
             
             if error:
@@ -328,7 +715,7 @@ class PCQRTool:
             
             # Display QR code
             self.root.after(0, lambda: self.display_qr_code(qr_image, site_name))
-            self.root.after(0, lambda: self.log_status(f"QR code generated for {site_name}. Please scan with WhatsApp."))
+            self.root.after(0, lambda: self.log_status(f"QR ready for {site_name} - Please scan!", 'success'))
             
             # Start polling
             self.is_polling = True
@@ -346,40 +733,44 @@ class PCQRTool:
             qr_image_bytes.seek(0)
             img = Image.open(qr_image_bytes)
             
-            # Resize for display (max 400x400)
-            max_size = 400
+            # Resize for display
+            max_size = 300
             img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             
             # Convert to PhotoImage
             photo = ImageTk.PhotoImage(img)
             
             # Update label
-            self.qr_label.config(image=photo, text="")
+            self.qr_label.config(image=photo, text="", bg='white')
             self.qr_label.image = photo  # Keep a reference
             
             # Update progress
             self.update_progress()
             
             # Enable regenerate button
-            self.regenerate_btn.config(state=tk.NORMAL)
+            self.regenerate_btn.configure(state='normal')
+            
+            # Update site indicator
+            self.site_indicator.config(text=f"📍 Scanning: {site_name}")
         
         except Exception as e:
-            self.log_status(f"Error displaying QR code: {str(e)}")
+            self.log_status(f"Error displaying QR: {str(e)}", 'error')
     
     def update_progress(self):
         """Update progress display"""
         completed = len(self.completed_websites)
         total = len(WEBSITES)
         
-        progress_icons = []
-        for i in range(total):
+        # Update progress indicators
+        for i, indicator in enumerate(self.progress_indicators):
             if i in self.completed_websites:
-                progress_icons.append("✅")
+                indicator.config(text="●", fg=COLORS['success'])
+            elif i == self.current_index:
+                indicator.config(text="◉", fg=COLORS['accent'])
             else:
-                progress_icons.append("⬜")
+                indicator.config(text="○", fg=COLORS['text_muted'])
         
-        progress_text = f"Progress: {' '.join(progress_icons)} ({completed}/{total})"
-        self.progress_label.config(text=progress_text)
+        self.progress_label.config(text=f"{completed} / {total} Completed")
     
     def start_polling(self, user_id, website_index, website):
         """Start polling for login status"""
@@ -417,10 +808,10 @@ class PCQRTool:
             elif status.get("status") == "waiting":
                 # Still waiting
                 if poll_count % 10 == 0:  # Update every 20 seconds
-                    self.root.after(0, lambda: self.log_status(f"Waiting for scan... ({poll_count * 2}s)"))
+                    self.root.after(0, lambda pc=poll_count: self.log_status(f"Waiting for scan... ({pc * 2}s)"))
             
             elif status.get("status") == "error":
-                self.root.after(0, lambda: self.log_status(f"Error checking status: {status.get('message')}"))
+                self.root.after(0, lambda s=status: self.log_status(f"Error: {s.get('message')}", 'error'))
                 break
         
         if poll_count >= max_polls:
@@ -431,11 +822,11 @@ class PCQRTool:
         self.is_polling = False
         
         site_name = get_site_name(website_index)
-        self.log_status(f"✅ {site_name} - Scanned successfully!")
+        self.log_status(f"✅ {site_name} - Success!", 'success')
         if phone:
-            self.log_status(f"Phone detected: {phone}")
+            self.log_status(f"📱 Phone: {phone}", 'success')
         if name:
-            self.log_status(f"Name detected: {name}")
+            self.log_status(f"👤 Name: {name}", 'success')
         
         # Mark as completed
         self.completed_websites.append(website_index)
@@ -474,17 +865,18 @@ class PCQRTool:
                 name
             )
         except Exception as e:
-            self.root.after(0, lambda: self.log_status(f"Error adding completion: {str(e)}"))
+            self.root.after(0, lambda: self.log_status(f"DB Error: {str(e)}", 'error'))
     
     def handle_scan_timeout(self, website_index):
         """Handle scan timeout"""
         self.is_polling = False
         site_name = get_site_name(website_index)
-        self.log_status(f"⏰ QR code expired for {site_name}. You can regenerate.")
+        self.log_status(f"⏰ QR expired for {site_name}", 'warning')
+        self.site_indicator.config(text=f"⏰ Expired: {site_name} - Click Regenerate")
         
     def handle_all_completed(self):
         """Handle all websites completed"""
-        self.log_status("🎉 All websites completed!")
+        self.log_status("🎉 All websites completed!", 'success')
         
         # Mark number as completed
         def mark_completed():
@@ -495,16 +887,19 @@ class PCQRTool:
         
         threading.Thread(target=mark_completed, daemon=True).start()
         
-        messagebox.showinfo("Success", "All websites completed! Earnings added to your account.")
+        self.show_modern_message("Success", "🎉 All websites completed!\n\nEarnings added to your account.", "success")
         
         # Reset for new number
         self.completed_websites = []
         self.current_index = 0
         self.current_phone_number = None
         self.current_phone_number_id = None
-        self.phone_entry.delete(0, tk.END)
-        self.qr_label.config(image="", text="No QR code generated yet")
-        self.regenerate_btn.config(state=tk.DISABLED)
+        self.phone_entry.delete(0, 'end')
+        self.qr_label.config(image="", text="🔒\n\nNo QR Code Generated\n\nEnter another phone number\nto continue", bg=COLORS['bg_input'])
+        self.qr_label.image = None
+        self.regenerate_btn.configure(state='disabled')
+        self.site_indicator.config(text="")
+        self.update_progress()
     
     async def mark_completed_async(self):
         """Mark phone number as completed"""
@@ -516,7 +911,7 @@ class PCQRTool:
                 self.current_phone_number
             )
         except Exception as e:
-            self.root.after(0, lambda: self.log_status(f"Error marking completed: {str(e)}"))
+            self.root.after(0, lambda: self.log_status(f"Error: {str(e)}", 'error'))
     
     def regenerate_qr(self):
         """Regenerate current QR code"""
@@ -524,7 +919,7 @@ class PCQRTool:
             return
         
         self.is_polling = False
-        self.regenerate_btn.config(state=tk.DISABLED)
+        self.regenerate_btn.configure(state='disabled')
         self.log_status("Regenerating QR code...")
         
         def regenerate():
@@ -548,26 +943,64 @@ class PCQRTool:
         threading.Thread(target=get_stats, daemon=True).start()
     
     def display_stats(self, stats):
-        """Display statistics in a message box"""
+        """Display statistics in a modern dialog"""
         if not stats:
-            messagebox.showerror("Error", "Could not retrieve statistics")
+            self.show_modern_message("Error", "Could not retrieve statistics", "error")
             return
         
-        stats_text = (
-            f"📊 Your Statistics\n\n"
-            f"📱 Numbers Added Today: {stats['numbers_added']}\n"
-            f"✅ Numbers Completed Today: {stats['numbers_completed']}\n"
-            f"💰 Today's Earnings: {stats['today_earnings']:.2f} Tk\n"
-            f"💵 Total Earnings: {stats['total_earnings']:.2f} Tk"
-        )
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Your Statistics")
+        dialog.geometry("450x350")
+        dialog.configure(bg=COLORS['bg_card'])
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
         
-        messagebox.showinfo("Statistics", stats_text)
+        # Center
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 450) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 350) // 2
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Header
+        tk.Label(dialog, text="📊 Your Statistics",
+                font=('Segoe UI', 18, 'bold'),
+                bg=COLORS['bg_card'], fg=COLORS['text_primary']).pack(pady=(25, 20))
+        
+        # Stats grid
+        stats_frame = tk.Frame(dialog, bg=COLORS['bg_card'])
+        stats_frame.pack(fill='x', padx=40, pady=(0, 20))
+        
+        stat_items = [
+            ("📱 Numbers Added Today", stats['numbers_added']),
+            ("✅ Numbers Completed Today", stats['numbers_completed']),
+            ("💰 Today's Earnings", f"{stats['today_earnings']:.2f} Tk"),
+            ("💵 Total Earnings", f"{stats['total_earnings']:.2f} Tk"),
+        ]
+        
+        for label, value in stat_items:
+            row = tk.Frame(stats_frame, bg=COLORS['bg_input'])
+            row.pack(fill='x', pady=5)
+            
+            tk.Label(row, text=label, font=('Segoe UI', 11),
+                    bg=COLORS['bg_input'], fg=COLORS['text_secondary'],
+                    anchor='w').pack(side='left', fill='x', expand=True, padx=15, pady=12)
+            
+            tk.Label(row, text=str(value), font=('Segoe UI', 12, 'bold'),
+                    bg=COLORS['bg_input'], fg=COLORS['accent'],
+                    anchor='e').pack(side='right', padx=15, pady=12)
+        
+        # Close button
+        close_btn = ModernButton(dialog, text="Close", command=dialog.destroy,
+                                width=120, height=38)
+        close_btn.pack(pady=(10, 25))
+
 
 def main():
     root = tk.Tk()
     app = PCQRTool(root)
     root.mainloop()
 
+
 if __name__ == "__main__":
     main()
-
