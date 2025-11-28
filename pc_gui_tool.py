@@ -1128,21 +1128,56 @@ class PCQRTool:
             self.root.after(0, lambda: self.log_status(f"Error: {str(e)}", 'error'))
     
     def regenerate_qr(self):
-        """Regenerate current QR code"""
+        """Regenerate QR code for CURRENT site (not next uncompleted)"""
         if self.current_index is None:
             return
         
         self.is_polling = False
         self.regenerate_btn.configure(state='disabled')
-        self.log_status("Regenerating QR code...")
+        
+        current_site = get_site_name(self.current_index)
+        self.log_status(f"Regenerating QR code for {current_site}...")
         
         def regenerate():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.generate_next_qr())
+            loop.run_until_complete(self.regenerate_current_qr())
             loop.close()
         
         threading.Thread(target=regenerate, daemon=True).start()
+    
+    async def regenerate_current_qr(self):
+        """Regenerate QR code for the current website (same site, new QR)"""
+        try:
+            website_index = self.current_index
+            website = WEBSITES[website_index]
+            site_name = get_site_name(website_index)
+            
+            user_id = self.get_session_user_id()
+            if not user_id:
+                self.root.after(0, lambda: self.log_status("Session error. Please login again.", 'error'))
+                return
+            
+            # Generate new QR code for the SAME site
+            self.root.after(0, lambda: self.log_status(f"Generating new QR for {site_name}..."))
+            qr_image, error = generate_qr_code(website, user_id, website_index)
+            
+            if error:
+                self.root.after(0, lambda: self.log_status(f"Error: {error}", 'error'))
+                self.root.after(0, lambda: self.regenerate_btn.configure(state='normal'))
+                return
+            
+            # Display QR code
+            self.root.after(0, lambda: self.display_qr_code(qr_image, site_name))
+            self.root.after(0, lambda: self.log_status(f"New QR ready for {site_name}!", 'success'))
+            
+            # Start polling again
+            self.is_polling = True
+            self.start_polling(user_id, website_index, website)
+            
+        except Exception as e:
+            self.root.after(0, lambda: self.log_status(f"Error: {str(e)}", 'error'))
+            self.root.after(0, lambda: self.regenerate_btn.configure(state='normal'))
     
     def show_stats(self):
         """Show user statistics"""
