@@ -2260,12 +2260,20 @@ async def poll_login_status(context: ContextTypes.DEFAULT_TYPE, user_id: int, we
                     except Exception as e:
                         logger.error(f"Error editing message: {e}")
                 
-                # Send new number prompt
+                # Store completed phone for re-scan
+                user_sessions[user_id]["last_completed_phone"] = current_phone
+                user_sessions[user_id]["last_completed_phone_display"] = phone_display
+                
+                # Send re-scan options message
                 try:
                     await context.bot.send_message(
                         chat_id=user_id, 
-                        text="📱 Send a new phone number to continue.",
-                        reply_markup=get_keyboard_for_user(user_id)
+                        text=(
+                            f"🎉 All 4 sites completed for {phone_display}!\n\n"
+                            f"📱 Send a new phone number to continue.\n\n"
+                            f"🔄 Or re-scan any site if needed (for unlinked accounts):"
+                        ),
+                        reply_markup=create_rescan_keyboard()
                     )
                 except Exception as e:
                     logger.error(f"Error sending completion message: {e}")
@@ -2633,11 +2641,37 @@ async def generate_and_update_same_message(context: ContextTypes.DEFAULT_TYPE, u
             pass
 
 
-def create_website_keyboard(website_index: int, show_next=False):
+def create_website_keyboard(website_index: int, show_next=False, is_rescan=False):
     """Create inline keyboard for QR code actions"""
-    keyboard = [
-        [InlineKeyboardButton("🔄 Regenerate QR", callback_data=f"generate_new_{website_index}")]
-    ]
+    keyboard = []
+    
+    # Navigation buttons for re-scan mode
+    if is_rescan:
+        nav_row = []
+        if website_index > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"rescan_{website_index - 1}"))
+        if website_index < len(WEBSITES) - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"rescan_{website_index + 1}"))
+        if nav_row:
+            keyboard.append(nav_row)
+    
+    # Regenerate button
+    keyboard.append([InlineKeyboardButton("🔄 Regenerate QR", callback_data=f"generate_new_{website_index}")])
+    
+    return InlineKeyboardMarkup(keyboard)
+
+
+def create_rescan_keyboard():
+    """Create keyboard for re-scanning after completion"""
+    keyboard = []
+    
+    # Create buttons for each website
+    for i, website in enumerate(WEBSITES):
+        site_name = get_site_name(i)
+        keyboard.append([InlineKeyboardButton(f"🔄 Re-scan {site_name}", callback_data=f"rescan_{i}")])
+    
+    keyboard.append([InlineKeyboardButton("📱 Add New Number", callback_data="new_number")])
+    
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -2678,6 +2712,97 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         await generate_and_send_next(context, user_id, website, website_index)
+    
+    # Handle re-scan for completed numbers (unlinked accounts)
+    elif data.startswith("rescan_"):
+        website_index = int(data.split("_")[-1])
+        website = WEBSITES[website_index]
+        site_name = get_site_name(website_index)
+        
+        # Get the last completed phone number
+        last_phone = user_sessions.get(user_id, {}).get("last_completed_phone")
+        last_phone_display = user_sessions.get(user_id, {}).get("last_completed_phone_display", "")
+        
+        if not last_phone:
+            await query.answer("❌ No completed number found. Please add a new number first.", show_alert=True)
+            return
+        
+        # Set re-scan mode
+        user_sessions[user_id]["is_rescan_mode"] = True
+        user_sessions[user_id]["current_phone_number"] = last_phone
+        user_sessions[user_id]["current_index"] = website_index
+        user_sessions[user_id]["is_polling"] = False
+        
+        # Update message
+        try:
+            await query.edit_message_text(
+                text=f"🔄 Re-scanning {site_name} for {last_phone_display}...\n\n⏳ Generating QR code..."
+            )
+        except:
+            pass
+        
+        # Generate QR code for re-scan (no queue needed, no success tracking)
+        await generate_rescan_qr(context, user_id, website, website_index)
+    
+    # Handle new number request
+    elif data == "new_number":
+        # Clear re-scan mode
+        if user_id in user_sessions:
+            user_sessions[user_id]["is_rescan_mode"] = False
+            user_sessions[user_id]["last_completed_phone"] = None
+        
+        await query.edit_message_text(
+            text="📱 Send a new phone number to start adding.",
+            reply_markup=None
+        )
+
+
+async def generate_rescan_qr(context: ContextTypes.DEFAULT_TYPE, user_id: int, website: dict, website_index: int):
+    """Generate QR code for re-scanning (no success tracking, no queue)
+    
+    This is for users who completed all 4 sites but need to re-scan
+    because WhatsApp got unlinked.
+    """
+    try:
+        site_name = get_site_name(website_index)
+        phone = user_sessions[user_id].get("current_phone_number", "")
+        phone_display = format_phone_number(phone) if phone else ""
+        
+        # Generate QR code directly (no queue for re-scan)
+        qr_image, error = generate_qr_code(website, user_id, website_index)
+        
+        if error:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ Error generating QR: {error}\n\nPlease try again.",
+                reply_markup=create_rescan_keyboard()
+            )
+            return
+        
+        # Send QR code with navigation buttons
+        qr_image.seek(0)
+        sent_message = await context.bot.send_photo(
+            chat_id=user_id,
+            photo=qr_image,
+            caption=(
+                f"🔄 Re-scan Mode\n\n"
+                f"📱 {phone_display}\n"
+                f"🌐 {site_name}\n\n"
+                f"📲 Scan with WhatsApp to re-link.\n"
+                f"(No success tracking - just scan and you're done!)\n\n"
+                f"Use ⬅️/➡️ to switch sites."
+            ),
+            reply_markup=create_website_keyboard(website_index, is_rescan=True)
+        )
+        
+        user_sessions[user_id]["last_message_id"] = sent_message.message_id
+        
+        # No polling for re-scan mode - user just scans and moves on
+        
+    except Exception as e:
+        logger.error(f"Error in generate_rescan_qr: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

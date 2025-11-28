@@ -228,6 +228,9 @@ class PCQRTool:
         self.session_user_id = None
         self.is_polling = False
         self.polling_thread = None
+        self.is_rescan_mode = False
+        self.last_completed_phone = None
+        self.rescan_nav_frame = None
         
         # Create UI
         self.create_ui()
@@ -894,19 +897,223 @@ class PCQRTool:
         
         threading.Thread(target=mark_completed, daemon=True).start()
         
-        self.show_modern_message("Success", "🎉 All websites completed!\n\nEarnings added to your account.", "success")
+        # Store completed phone for re-scan
+        self.last_completed_phone = self.current_phone_number
         
-        # Reset for new number
+        # Show completion dialog with re-scan option
+        self.show_completion_dialog()
+        
+        # Reset state but keep last_completed_phone
         self.completed_websites = []
         self.current_index = 0
         self.current_phone_number = None
         self.current_phone_number_id = None
         self.phone_entry.delete(0, 'end')
-        self.qr_label.config(image="", text="🔒\n\nNo QR Code Generated\n\nEnter another phone number\nto continue", bg=COLORS['bg_input'])
+        self.qr_label.config(image="", text="🔒\n\nNo QR Code Generated\n\nEnter another phone number\nor use Re-scan for unlinked accounts", bg=COLORS['bg_input'])
         self.qr_label.image = None
         self.regenerate_btn.configure(state='disabled')
         self.site_indicator.config(text="")
         self.update_progress()
+    
+    def show_completion_dialog(self):
+        """Show completion dialog with re-scan options"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("All Sites Completed!")
+        dialog.geometry("450x400")
+        dialog.configure(bg=COLORS['bg_card'])
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 450) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 400) // 2
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Header
+        tk.Label(dialog, text="🎉", font=('Segoe UI', 48),
+                bg=COLORS['bg_card'], fg=COLORS['success']).pack(pady=(20, 10))
+        
+        tk.Label(dialog, text="All 4 Sites Completed!",
+                font=('Segoe UI', 16, 'bold'),
+                bg=COLORS['bg_card'], fg=COLORS['text_primary']).pack()
+        
+        phone_display = format_phone_number(self.last_completed_phone) if self.last_completed_phone else ""
+        tk.Label(dialog, text=f"📱 {phone_display}\n💰 Earnings added to your account!",
+                font=('Segoe UI', 11),
+                bg=COLORS['bg_card'], fg=COLORS['text_secondary'],
+                justify='center').pack(pady=(10, 20))
+        
+        # Re-scan section
+        tk.Label(dialog, text="🔄 Re-scan if WhatsApp got unlinked:",
+                font=('Segoe UI', 10),
+                bg=COLORS['bg_card'], fg=COLORS['text_muted']).pack(pady=(0, 10))
+        
+        # Re-scan buttons frame
+        rescan_frame = tk.Frame(dialog, bg=COLORS['bg_card'])
+        rescan_frame.pack(fill='x', padx=30, pady=(0, 15))
+        
+        for i in range(len(WEBSITES)):
+            site_name = get_site_name(i)
+            btn = ModernButton(rescan_frame, text=f"🔄 {site_name}",
+                              command=lambda idx=i, d=dialog: self.start_rescan(idx, d),
+                              width=180, height=35,
+                              bg=COLORS['bg_input'], hover_bg=COLORS['highlight'],
+                              font_size=10)
+            btn.pack(pady=3)
+        
+        # New number button
+        new_btn = ModernButton(dialog, text="📱 Add New Number",
+                              command=dialog.destroy,
+                              width=200, height=40)
+        new_btn.pack(pady=(10, 20))
+    
+    def start_rescan(self, website_index, dialog=None):
+        """Start re-scanning a specific website"""
+        if dialog:
+            dialog.destroy()
+        
+        if not self.last_completed_phone:
+            self.show_modern_message("Error", "No completed number found.\nPlease add a new number first.", "error")
+            return
+        
+        self.is_rescan_mode = True
+        self.current_phone_number = self.last_completed_phone
+        self.current_index = website_index
+        
+        site_name = get_site_name(website_index)
+        self.log_status(f"🔄 Re-scanning {site_name}...")
+        self.site_indicator.config(text=f"🔄 Re-scan: {site_name}")
+        
+        # Generate QR for re-scan
+        def rescan():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.generate_rescan_qr(website_index))
+            loop.close()
+        
+        threading.Thread(target=rescan, daemon=True).start()
+    
+    async def generate_rescan_qr(self, website_index):
+        """Generate QR code for re-scanning (no success tracking)"""
+        try:
+            website = WEBSITES[website_index]
+            site_name = get_site_name(website_index)
+            
+            user_id = self.get_session_user_id()
+            if not user_id:
+                self.root.after(0, lambda: self.log_status("Session error. Please login again.", 'error'))
+                return
+            
+            # Generate QR code
+            qr_image, error = generate_qr_code(website, user_id, website_index)
+            
+            if error:
+                self.root.after(0, lambda: self.log_status(f"Error: {error}", 'error'))
+                self.root.after(0, lambda: self.show_modern_message("Error", error, "error"))
+                return
+            
+            # Display QR code
+            self.root.after(0, lambda: self.display_rescan_qr(qr_image, site_name, website_index))
+            self.root.after(0, lambda: self.log_status(f"🔄 Re-scan QR for {site_name} ready!", 'success'))
+            
+        except Exception as e:
+            self.root.after(0, lambda: self.log_status(f"Error: {str(e)}", 'error'))
+    
+    def display_rescan_qr(self, qr_image_bytes, site_name, website_index):
+        """Display QR code for re-scan with navigation"""
+        try:
+            # Convert bytes to PIL Image
+            qr_image_bytes.seek(0)
+            img = Image.open(qr_image_bytes)
+            
+            # Resize for display
+            max_size = 300
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
+            # Convert to PhotoImage
+            photo = ImageTk.PhotoImage(img)
+            
+            # Update label
+            self.qr_label.config(image=photo, text="", bg='white')
+            self.qr_label.image = photo
+            
+            # Update site indicator with navigation hint
+            phone_display = format_phone_number(self.current_phone_number) if self.current_phone_number else ""
+            self.site_indicator.config(text=f"🔄 Re-scan: {site_name} | 📱 {phone_display}")
+            
+            # Show re-scan navigation buttons
+            self.show_rescan_navigation(website_index)
+            
+        except Exception as e:
+            self.log_status(f"Error displaying QR: {str(e)}", 'error')
+    
+    def show_rescan_navigation(self, current_index):
+        """Show navigation buttons for re-scan mode"""
+        # Create navigation frame if not exists
+        if hasattr(self, 'rescan_nav_frame') and self.rescan_nav_frame:
+            self.rescan_nav_frame.destroy()
+        
+        self.rescan_nav_frame = tk.Frame(self.root, bg=COLORS['bg_main'])
+        self.rescan_nav_frame.place(relx=0.65, rely=0.75, anchor='center')
+        
+        nav_frame = tk.Frame(self.rescan_nav_frame, bg=COLORS['bg_main'])
+        nav_frame.pack()
+        
+        # Previous button
+        if current_index > 0:
+            prev_btn = ModernButton(nav_frame, text="⬅️ Previous",
+                                   command=lambda: self.navigate_rescan(current_index - 1),
+                                   width=100, height=35,
+                                   bg=COLORS['bg_card'], hover_bg=COLORS['highlight'],
+                                   font_size=10)
+            prev_btn.pack(side='left', padx=5)
+        
+        # Next button
+        if current_index < len(WEBSITES) - 1:
+            next_btn = ModernButton(nav_frame, text="Next ➡️",
+                                   command=lambda: self.navigate_rescan(current_index + 1),
+                                   width=100, height=35,
+                                   bg=COLORS['bg_card'], hover_bg=COLORS['highlight'],
+                                   font_size=10)
+            next_btn.pack(side='left', padx=5)
+        
+        # Done button
+        done_btn = ModernButton(nav_frame, text="✅ Done",
+                               command=self.exit_rescan_mode,
+                               width=80, height=35,
+                               font_size=10)
+        done_btn.pack(side='left', padx=5)
+    
+    def navigate_rescan(self, website_index):
+        """Navigate to another site in re-scan mode"""
+        self.current_index = website_index
+        site_name = get_site_name(website_index)
+        self.log_status(f"🔄 Switching to {site_name}...")
+        
+        def rescan():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.generate_rescan_qr(website_index))
+            loop.close()
+        
+        threading.Thread(target=rescan, daemon=True).start()
+    
+    def exit_rescan_mode(self):
+        """Exit re-scan mode"""
+        self.is_rescan_mode = False
+        
+        # Remove navigation frame
+        if hasattr(self, 'rescan_nav_frame') and self.rescan_nav_frame:
+            self.rescan_nav_frame.destroy()
+            self.rescan_nav_frame = None
+        
+        # Reset UI
+        self.qr_label.config(image="", text="🔒\n\nNo QR Code Generated\n\nEnter a phone number to start", bg=COLORS['bg_input'])
+        self.qr_label.image = None
+        self.site_indicator.config(text="")
+        self.log_status("Re-scan mode ended. Ready for new number.", 'success')
     
     async def mark_completed_async(self):
         """Mark phone number as completed"""
