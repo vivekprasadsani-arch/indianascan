@@ -1513,14 +1513,18 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             from backend_core import update_user_status_pc
             
             # Update PC user status
-            await update_user_status_pc(mobile_number, 'approved', admin_id)
+            result = await update_user_status_pc(mobile_number, 'approved', admin_id)
             
-            # PC users can't be notified via Telegram, so just log
-            logger.info(f"PC user {mobile_number} approved by admin {admin_id}")
-            
-            await query.edit_message_text(
-                f"{query.message.text}\n\n✅ Approved! (PC User)"
-            )
+            if result:
+                # PC users can't be notified via Telegram, so just log
+                logger.info(f"PC user {mobile_number} approved by admin {admin_id}")
+                
+                await query.edit_message_text(
+                    f"{query.message.text}\n\n✅ Approved! (PC User)\n📱 Mobile: {mobile_number}"
+                )
+                await query.answer("✅ PC User approved successfully!", show_alert=True)
+            else:
+                await query.answer("❌ Error approving user. Please try again.", show_alert=True)
         else:
             # Telegram user - use Telegram ID
             target_user_id = int(identifier)
@@ -1560,13 +1564,17 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             from backend_core import update_user_status_pc
             
             # Update PC user status
-            await update_user_status_pc(mobile_number, 'rejected', admin_id)
+            result = await update_user_status_pc(mobile_number, 'rejected', admin_id)
             
-            logger.info(f"PC user {mobile_number} rejected by admin {admin_id}")
-            
-            await query.edit_message_text(
-                f"{query.message.text}\n\n❌ Rejected! (PC User)"
-            )
+            if result:
+                logger.info(f"PC user {mobile_number} rejected by admin {admin_id}")
+                
+                await query.edit_message_text(
+                    f"{query.message.text}\n\n❌ Rejected! (PC User)\n📱 Mobile: {mobile_number}"
+                )
+                await query.answer("❌ PC User rejected", show_alert=True)
+            else:
+                await query.answer("❌ Error rejecting user. Please try again.", show_alert=True)
         else:
             # Telegram user
             target_user_id = int(identifier)
@@ -1749,19 +1757,32 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 msg = f"⏳ Pending Users ({len(users)}):\n\n"
                 for u in users:
+                    # Check if PC user (has mobile_number and no telegram_user_id or user_type is 'pc')
+                    mobile = u.get('mobile_number')
+                    telegram_id = u.get('telegram_user_id')
                     user_type = u.get('user_type', 'telegram')
-                    if user_type == 'pc':
+                    
+                    # Determine if PC user
+                    is_pc_user = (user_type == 'pc') or (mobile and not telegram_id)
+                    
+                    if is_pc_user:
                         # PC user - show mobile number
-                        mobile = u.get('mobile_number', 'N/A')
-                        username = f"PC User: {mobile}"
+                        mobile = mobile or 'N/A'
+                        username = f"PC User"
+                        display_name = f"PC User: {mobile}"
                         identifier = f"pc_{mobile}"  # Use mobile number as identifier
+                        user_type_emoji = "💻"
+                        display_msg = f"👤 {display_name}\n📱 Mobile: {mobile}"
                     else:
                         # Telegram user
-                        username = u.get('username') or u.get('first_name') or f"ID: {u['telegram_user_id']}"
-                        identifier = str(u['telegram_user_id'])
+                        username = u.get('username') or u.get('first_name') or 'Telegram User'
+                        telegram_id = telegram_id or 'N/A'
+                        display_name = username
+                        identifier = str(telegram_id) if telegram_id != 'N/A' else 'unknown'
+                        user_type_emoji = "📱"
+                        display_msg = f"👤 {display_name}\n🆔 Telegram ID: {telegram_id}"
                     
-                    user_type_emoji = "💻" if user_type == 'pc' else "📱"
-                    msg += f"{user_type_emoji} {username}\n"
+                    msg += f"{user_type_emoji} {display_name}\n"
                     
                     # Send approval buttons
                     keyboard = [
@@ -1770,11 +1791,6 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
                             InlineKeyboardButton("❌ Reject", callback_data=f"reject_{identifier}")
                         ]
                     ]
-                    # Format display message
-                    if user_type == 'pc':
-                        display_msg = f"👤 {username}\n📱 Mobile: {mobile}"
-                    else:
-                        display_msg = f"👤 {username}\n🆔 Telegram ID: {identifier}"
                     
                     await update.message.reply_text(
                         display_msg,
